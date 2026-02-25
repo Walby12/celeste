@@ -15,6 +15,10 @@ pub fn lexe(comp: &mut Compiler) {
                 comp.index += 1;
                 lexe(comp);
             }
+            '=' => {
+                comp.index += 1;
+                comp.cur_tok = TokenType::Equals;
+            }
             '{' => {
                 comp.index += 1;
                 comp.cur_tok = TokenType::OpenCurly;
@@ -47,6 +51,7 @@ pub fn lexe(comp: &mut Compiler) {
 
                 comp.cur_tok = match value {
                     "fn" => TokenType::Fn,
+                    "let" => TokenType::Let,
                     _ => TokenType::Ident(value.to_string()),
                 };
             }

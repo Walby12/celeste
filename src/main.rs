@@ -1,15 +1,16 @@
+mod ast;
 mod compiler;
 mod lexer;
+mod parser;
 mod tokens;
 
 use crate::compiler::*;
 use crate::tokens::*;
 
 fn main() {
-    let mut comp = Compiler::new("fn main() {}".to_string());
-    lexer::lexe(&mut comp);
-    while comp.cur_tok != TokenType::Eof {
-        println!("{:?}", comp.cur_tok);
-        lexer::lexe(&mut comp);
+    let mut comp = Compiler::new("let x = Hello;".to_string());
+    let program = parser::parse(&mut comp);
+    for stmt in program.stmts {
+        println!("{:?}", stmt);
     }
 }
