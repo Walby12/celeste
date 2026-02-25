@@ -42,7 +42,7 @@ pub fn lexe(comp: &mut Compiler) {
             _ => {
                 let start = comp.index;
                 while let Some(curr) = comp.src.chars().nth(comp.index) {
-                    if curr.is_whitespace() || "{}();".contains(curr) {
+                    if curr.is_whitespace() || "{}();=".contains(curr) {
                         break;
                     }
                     comp.index += 1;
@@ -52,6 +52,10 @@ pub fn lexe(comp: &mut Compiler) {
                 comp.cur_tok = match value {
                     "fn" => TokenType::Fn,
                     "let" => TokenType::Let,
+                    _ if value.chars().all(|c| c.is_ascii_digit()) => {
+                        let n = value.parse::<i32>().unwrap_or(0);
+                        TokenType::Int(n)
+                    }
                     _ => TokenType::Ident(value.to_string()),
                 };
             }

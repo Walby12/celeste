@@ -6,6 +6,7 @@ pub struct Program {
 #[derive(Debug)]
 pub enum Expr {
     Variable(String),
+    Integer(i32),
 }
 
 #[derive(Debug)]
