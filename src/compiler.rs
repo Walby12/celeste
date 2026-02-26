@@ -1,10 +1,12 @@
 use crate::tokens::*;
+use std::collections::HashSet;
 
 pub struct Compiler {
     pub src: String,
     pub line: u64,
     pub index: usize,
     pub cur_tok: TokenType,
+    pub locals: HashSet<String>,
 }
 
 impl Compiler {
@@ -14,6 +16,7 @@ impl Compiler {
             line: 1,
             index: 0,
             cur_tok: TokenType::Eof,
+            locals: HashSet::new(),
         }
     }
 }

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 #[derive(Debug)]
 pub struct Program {
     pub stmts: Vec<Stmt>,
@@ -11,7 +13,14 @@ pub enum Expr {
 
 #[derive(Debug)]
 pub enum Stmt {
-    Let { name: String, value: Expr },
-    Function { name: String, body: Vec<Stmt> },
+    Let {
+        name: String,
+        value: Expr,
+    },
+    Function {
+        name: String,
+        body: Vec<Stmt>,
+        locals: HashSet<String>,
+    },
     Expression(Expr),
 }

@@ -20,7 +20,7 @@ fn parse_top_level(comp: &mut Compiler) -> Stmt {
     match comp.cur_tok {
         TokenType::Fn => parse_fn_decl(comp),
         _ => {
-            println!(
+            eprintln!(
                 "error, line {}: unexpected statement in top level {:?}",
                 comp.line, comp.cur_tok
             );
@@ -32,41 +32,39 @@ fn parse_top_level(comp: &mut Compiler) -> Stmt {
 fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     lexe(comp);
 
+    comp.locals.clear();
+
     let fn_name = if let TokenType::Ident(ref name) = comp.cur_tok {
         name.clone()
     } else {
-        println!(
-            "error, line {}: expected identifier, got {:?}",
+        eprintln!(
+            "error, line {}: expected identifier after fn keyword, got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
     };
 
     lexe(comp);
-
     if !matches!(comp.cur_tok, TokenType::OpenParen) {
-        println!(
-            "error, line {}: expected '(', got {:?}",
+        eprintln!(
+            "error, line {}: expected '(' after the function name, got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
     }
-    lexe(comp);
 
+    lexe(comp);
     if !matches!(comp.cur_tok, TokenType::CloseParen) {
-        println!(
-            "error, line {}: expected ')', got {:?}",
+        eprintln!(
+            "error, line {}: expected ')' after '(', got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
     }
-    lexe(comp);
 
+    lexe(comp);
     if !matches!(comp.cur_tok, TokenType::OpenCurly) {
-        println!(
-            "error, line {}: expected '{{', got {:?}",
-            comp.line, comp.cur_tok
-        );
+        eprintln!("error: expected {{");
         exit(1);
     }
 
@@ -75,6 +73,7 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     Stmt::Function {
         name: fn_name,
         body: body,
+        locals: comp.locals.clone(),
     }
 }
 
@@ -92,7 +91,7 @@ fn parse_block(comp: &mut Compiler) -> Vec<Stmt> {
     if matches!(comp.cur_tok, TokenType::CloseCurly) {
         lexe(comp);
     } else {
-        println!(
+        eprintln!(
             "error, line {}: expected '}}' at end of block, got {:?}",
             comp.line, comp.cur_tok
         );
@@ -106,7 +105,7 @@ fn parse_stmt(comp: &mut Compiler) -> Stmt {
     match comp.cur_tok {
         TokenType::Let => parse_let_stmt(comp),
         _ => {
-            println!(
+            eprintln!(
                 "error line {}: unknown statement in function scope {:?}",
                 comp.line, comp.cur_tok
             );
@@ -121,7 +120,7 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
     let var_name = if let TokenType::Ident(ref name) = comp.cur_tok {
         name.clone()
     } else {
-        println!(
+        eprintln!(
             "error, line {}: expected identifier, got {:?}",
             comp.line, comp.cur_tok
         );
@@ -130,7 +129,7 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
     lexe(comp);
 
     if !matches!(comp.cur_tok, TokenType::Equals) {
-        println!(
+        eprintln!(
             "error, line {}: expected '=', got {:?}",
             comp.line, comp.cur_tok
         );
@@ -140,9 +139,11 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
 
     let value_expr = if let TokenType::Int(ref num) = comp.cur_tok {
         Expr::Integer(num.clone())
+    } else if let TokenType::Ident(ref name) = comp.cur_tok {
+        Expr::Variable(name.clone())
     } else {
-        println!(
-            "error, line {}: expected an integer after '=', got {:?}",
+        eprintln!(
+            "error, line {}: expected an integer or a variable after '=', got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
@@ -152,12 +153,13 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
     if matches!(comp.cur_tok, TokenType::Semicolon) {
         lexe(comp);
     } else {
-        println!(
+        eprintln!(
             "error, line {}: expected ';' after let statement, got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
     }
+    comp.locals.insert(var_name.clone());
 
     Stmt::Let {
         name: var_name,
