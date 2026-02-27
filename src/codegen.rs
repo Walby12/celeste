@@ -41,8 +41,13 @@ impl CraneliftAOTBackend {
     pub fn compile_program(&mut self, program: &Program) {
         for stmt in &program.stmts {
             match stmt {
-                Stmt::Function { name, body, locals } => {
-                    self.compile_function(name, body, locals);
+                Stmt::Function {
+                    name,
+                    body,
+                    locals,
+                    return_type,
+                } => {
+                    self.compile_function(name, body, locals, return_type);
                 }
                 _ => {
                     todo!()
@@ -51,15 +56,22 @@ impl CraneliftAOTBackend {
         }
     }
 
-    fn compile_function(&mut self, name: &str, body: &[Stmt], locals: &HashSet<String>) {
-        let i32_type = types::I32;
-
+    fn compile_function(
+        &mut self,
+        name: &str,
+        body: &[Stmt],
+        locals: &HashSet<String>,
+        return_type: &String,
+    ) {
         self.ctx.func.signature.returns.clear();
-        self.ctx
-            .func
-            .signature
-            .returns
-            .push(AbiParam::new(i32_type));
+
+        if return_type == "int" {
+            self.ctx
+                .func
+                .signature
+                .returns
+                .push(AbiParam::new(types::I32));
+        }
 
         let func_id = self
             .module
@@ -75,22 +87,18 @@ impl CraneliftAOTBackend {
         let mut var_map = HashMap::new();
         for (i, var_name) in locals.iter().enumerate() {
             let var_ref = Variable::new(i);
-            builder.declare_var(var_ref, i32_type);
+            builder.declare_var(var_ref, types::I32);
             var_map.insert(var_name.clone(), var_ref);
         }
 
         for stmt in body {
-            Self::translate_stmt(&mut builder, stmt, &var_map);
+            Self::translate_stmt(&mut builder, stmt, &var_map, return_type);
         }
-
-        let zero = builder.ins().iconst(i32_type, 0);
-        builder.ins().return_(&[zero]);
 
         builder.finalize();
         self.module
             .define_function(func_id, &mut self.ctx)
             .expect("Definition error");
-
         self.module.clear_context(&mut self.ctx);
     }
 
@@ -98,16 +106,25 @@ impl CraneliftAOTBackend {
         builder: &mut FunctionBuilder,
         stmt: &Stmt,
         var_map: &HashMap<String, Variable>,
+        return_type: &String,
     ) {
         match stmt {
             Stmt::Let { name, value } => {
-                let val = Self::translate_expr(builder, value, var_map);
+                let val = Self::translate_expr(builder, value, var_map, return_type);
 
                 let var_ref = var_map
                     .get(name)
                     .expect("Variable not found in map (Compiler/Parser desync)");
 
                 builder.def_var(*var_ref, val);
+            }
+            Stmt::Return { value } => {
+                let val = Self::translate_expr(builder, value, var_map, return_type);
+                if return_type == "int" {
+                    builder.ins().return_(&[val]);
+                } else {
+                    builder.ins().return_(&[]);
+                }
             }
             _ => {}
         }
@@ -117,6 +134,7 @@ impl CraneliftAOTBackend {
         builder: &mut FunctionBuilder,
         expr: &Expr,
         var_map: &HashMap<String, Variable>,
+        return_type: &String,
     ) -> Value {
         match expr {
             Expr::Integer(n) => builder.ins().iconst(types::I32, *n as i64),

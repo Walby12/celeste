@@ -23,5 +23,7 @@ pub enum Stmt {
         body: Vec<Stmt>,
         locals: HashSet<String>,
     },
-    Expression(Expr),
+    Return {
+        value: Expr,
+    },
 }

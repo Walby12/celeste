@@ -98,11 +98,18 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
 
     let mut func = Stmt::Function {
         name: fn_name,
-        return_type: fn_return_type,
+        return_type: fn_return_type.clone(),
         body: Vec::new(),
         locals: comp.locals.clone(),
     };
-    parse_block(comp, &mut func);
+    let had_return = parse_block(comp, &mut func);
+    if fn_return_type != "void" && !had_return {
+        eprintln!(
+            "error, line {}: did not found a return statement in non void function",
+            comp.line
+        );
+        exit(1);
+    }
 
     if let Stmt::Function { ref mut locals, .. } = func {
         *locals = comp.locals.clone();
@@ -112,16 +119,25 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     func
 }
 
-fn parse_block(comp: &mut Compiler, func: &mut Stmt) {
+fn parse_block(comp: &mut Compiler, func: &mut Stmt) -> bool {
     if matches!(comp.cur_tok, TokenType::OpenCurly) {
         lexe(comp);
     }
 
-    if let Stmt::Function { body, .. } = func {
-        while comp.cur_tok != TokenType::CloseCurly && comp.cur_tok != TokenType::Eof {
-            let stmt = parse_stmt(comp, func);
-            body.push(stmt);
+    let mut has_return = false;
+    let mut stmts = Vec::new();
+
+    while comp.cur_tok != TokenType::CloseCurly && comp.cur_tok != TokenType::Eof {
+        let stmt = parse_stmt(comp, func);
+        if matches!(stmt, Stmt::Return { .. }) {
+            has_return = true;
         }
+
+        stmts.push(stmt);
+    }
+
+    if let Stmt::Function { body, .. } = func {
+        body.extend(stmts);
     }
 
     if matches!(comp.cur_tok, TokenType::CloseCurly) {
@@ -133,6 +149,7 @@ fn parse_block(comp: &mut Compiler, func: &mut Stmt) {
         );
         exit(1);
     }
+    has_return
 }
 
 fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
@@ -175,6 +192,10 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
     let value_expr = if let TokenType::Int(ref num) = comp.cur_tok {
         Expr::Integer(num.clone())
     } else if let TokenType::Ident(ref name) = comp.cur_tok {
+        if !comp.locals.contains(name) {
+            eprintln!("error, line {}: unknow variable: '{}'", comp.line, name);
+            exit(1);
+        }
         Expr::Variable(name.clone())
     } else {
         eprintln!(
@@ -205,19 +226,51 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
 fn parse_return_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
     lexe(comp);
 
-    let return_val = if let TokenType::Ident(ref name) = comp.cur_tok {
-        name.clone()
-    } else if let TokenType::Int(ref num) = comp.cur_tok {
-        if let Stmt::Function { return_type, .. } = func {
-            if (return_type != "int") {
-                eprintln!("error, line {}: expected an integer for an int returning function")
-            }
-        }
+    let is_void = if let Stmt::Function { return_type, .. } = func {
+        return_type == "void"
     } else {
+        false
+    };
+
+    let return_val = if is_void {
+        if !matches!(comp.cur_tok, TokenType::Semicolon) {
+            eprintln!(
+                "error, line {}: in void returning function, expected empty return statement",
+                comp.line
+            );
+            exit(1);
+        }
+        Expr::Integer(0)
+    } else {
+        let val = match &comp.cur_tok {
+            TokenType::Ident(name) => {
+                if !comp.locals.contains(name) {
+                    eprintln!("error, line {}: undefined variable '{}'", comp.line, name);
+                    exit(1);
+                }
+                Expr::Variable(name.clone())
+            }
+            TokenType::Int(value) => Expr::Integer(*value),
+            _ => {
+                eprintln!(
+                    "error, line {}: expected variable or literal for return statement, got {:?}",
+                    comp.line, comp.cur_tok
+                );
+                exit(1);
+            }
+        };
+        lexe(comp);
+        val
+    };
+
+    if !matches!(comp.cur_tok, TokenType::Semicolon) {
         eprintln!(
-            "error, line {}: expected a variable or a valid type, got {:?}",
+            "error, line {}: expected ';' after return, got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
-    };
+    }
+    lexe(comp);
+
+    Stmt::Return { value: return_val }
 }
