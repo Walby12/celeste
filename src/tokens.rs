@@ -10,5 +10,6 @@ pub enum TokenType {
     Semicolon,
     Fn,
     Let,
+    Return,
     Eof,
 }

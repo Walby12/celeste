@@ -63,29 +63,65 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     }
 
     lexe(comp);
+    let fn_return_type = if let TokenType::Ident(ref fn_type) = comp.cur_tok {
+        match fn_type.as_str() {
+            "void" | "int" => fn_type.clone(),
+            _ => {
+                eprintln!(
+                    "error, line {}: unknow return type {:?}",
+                    comp.line, comp.cur_tok
+                );
+                exit(1);
+            }
+        }
+    } else {
+        eprintln!(
+            "error, line {}: expected return type after ')', got {:?}",
+            comp.line, comp.cur_tok
+        );
+        exit(1);
+    };
+
+    if fn_return_type != "int" && fn_name == "main" {
+        eprintln!(
+            "error, line {}: main expects an int return type, got {}",
+            comp.line, fn_return_type
+        );
+        exit(1);
+    }
+
+    lexe(comp);
     if !matches!(comp.cur_tok, TokenType::OpenCurly) {
         eprintln!("error: expected {{");
         exit(1);
     }
 
-    let body = parse_block(comp);
-
-    Stmt::Function {
+    let mut func = Stmt::Function {
         name: fn_name,
-        body: body,
+        return_type: fn_return_type,
+        body: Vec::new(),
         locals: comp.locals.clone(),
+    };
+    parse_block(comp, &mut func);
+
+    if let Stmt::Function { ref mut locals, .. } = func {
+        *locals = comp.locals.clone();
+        comp.locals.clear();
     }
+
+    func
 }
 
-fn parse_block(comp: &mut Compiler) -> Vec<Stmt> {
+fn parse_block(comp: &mut Compiler, func: &mut Stmt) {
     if matches!(comp.cur_tok, TokenType::OpenCurly) {
         lexe(comp);
     }
 
-    let mut stmts = Vec::new();
-    while comp.cur_tok != TokenType::CloseCurly && comp.cur_tok != TokenType::Eof {
-        let stmt = parse_stmt(comp);
-        stmts.push(stmt);
+    if let Stmt::Function { body, .. } = func {
+        while comp.cur_tok != TokenType::CloseCurly && comp.cur_tok != TokenType::Eof {
+            let stmt = parse_stmt(comp, func);
+            body.push(stmt);
+        }
     }
 
     if matches!(comp.cur_tok, TokenType::CloseCurly) {
@@ -97,13 +133,12 @@ fn parse_block(comp: &mut Compiler) -> Vec<Stmt> {
         );
         exit(1);
     }
-
-    stmts
 }
 
-fn parse_stmt(comp: &mut Compiler) -> Stmt {
+fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
     match comp.cur_tok {
         TokenType::Let => parse_let_stmt(comp),
+        TokenType::Return => parse_return_stmt(comp, func),
         _ => {
             eprintln!(
                 "error line {}: unknown statement in function scope {:?}",
@@ -165,4 +200,24 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
         name: var_name,
         value: value_expr,
     }
+}
+
+fn parse_return_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
+    lexe(comp);
+
+    let return_val = if let TokenType::Ident(ref name) = comp.cur_tok {
+        name.clone()
+    } else if let TokenType::Int(ref num) = comp.cur_tok {
+        if let Stmt::Function { return_type, .. } = func {
+            if (return_type != "int") {
+                eprintln!("error, line {}: expected an integer for an int returning function")
+            }
+        }
+    } else {
+        eprintln!(
+            "error, line {}: expected a variable or a valid type, got {:?}",
+            comp.line, comp.cur_tok
+        );
+        exit(1);
+    };
 }

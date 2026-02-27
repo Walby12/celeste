@@ -19,6 +19,7 @@ pub enum Stmt {
     },
     Function {
         name: String,
+        return_type: String,
         body: Vec<Stmt>,
         locals: HashSet<String>,
     },

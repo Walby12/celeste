@@ -52,6 +52,7 @@ pub fn lexe(comp: &mut Compiler) {
                 comp.cur_tok = match value {
                     "fn" => TokenType::Fn,
                     "let" => TokenType::Let,
+                    "return" => TokenType::Return,
                     _ if value.chars().all(|c| c.is_ascii_digit()) => {
                         let n = value.parse::<i32>().unwrap_or(0);
                         TokenType::Int(n)
