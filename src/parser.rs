@@ -561,7 +561,7 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
 }
 
 fn string_to_celeste_type(s: &str) -> CelesteType {
-    match s.trim().to_lowercase().as_str() {
+    match s.trim() {
         "int" => CelesteType::Int,
         "string" => CelesteType::String,
         _ => {

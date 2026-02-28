@@ -206,12 +206,21 @@ impl CraneliftAOTBackend {
         }
 
         if !terminated {
-            if return_type == "void" {
-                builder.ins().return_(&[]);
-            } else {
-                let zero = builder.ins().iconst(types::I32, 0);
-
-                builder.ins().return_(&[zero]);
+            match return_type.as_str() {
+                "void" => {
+                    builder.ins().return_(&[]);
+                }
+                "int" => {
+                    eprintln!(
+                        "error: function '{}' reaches end of non-void function without return",
+                        name
+                    );
+                    exit(1);
+                }
+                _ => {
+                    let null_ptr = builder.ins().iconst(ptr_type, 0);
+                    builder.ins().return_(&[null_ptr]);
+                }
             }
         }
 

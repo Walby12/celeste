@@ -68,9 +68,41 @@ pub fn lexe(comp: &mut Compiler) {
             return;
         }
         b'/' => {
+            let start_index = comp.index;
             comp.index += 1;
-            comp.cur_tok = TokenType::Slash;
-            return;
+
+            if comp.index < comp.src.len() && comp.src[comp.index] == b'/' {
+                comp.index += 1;
+                while comp.index < comp.src.len() && comp.src[comp.index] != b'\n' {
+                    comp.index += 1;
+                }
+                return lexe(comp);
+            } else if comp.index < comp.src.len() && comp.src[comp.index] == b'*' {
+                comp.index += 1;
+                let mut found_end = false;
+
+                while comp.index + 1 < comp.src.len() {
+                    if comp.src[comp.index] == b'*' && comp.src[comp.index + 1] == b'/' {
+                        comp.index += 2;
+                        found_end = true;
+                        break;
+                    }
+                    comp.index += 1;
+                }
+
+                if !found_end {
+                    eprintln!(
+                        "error: unterminated block comment starting at index {}",
+                        start_index
+                    );
+                    std::process::exit(1);
+                }
+
+                return lexe(comp);
+            } else {
+                comp.cur_tok = TokenType::Slash;
+                return;
+            }
         }
         b',' => {
             comp.index += 1;
