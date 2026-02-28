@@ -63,6 +63,8 @@ impl CraneliftAOTBackend {
         locals: &HashSet<String>,
         return_type: &String,
     ) {
+        self.ctx.func.clear();
+        self.ctx.func.signature.params.clear();
         self.ctx.func.signature.returns.clear();
 
         if return_type == "int" {
@@ -76,29 +78,43 @@ impl CraneliftAOTBackend {
         let func_id = self
             .module
             .declare_function(name, Linkage::Export, &self.ctx.func.signature)
-            .expect("Failed to declare function");
+            .expect("Function declaration failed");
 
         let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
         let entry_block = builder.create_block();
+
         builder.append_block_params_for_function_params(entry_block);
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
 
         let mut var_map = HashMap::new();
-        for (i, var_name) in locals.iter().enumerate() {
+        let mut sorted_locals: Vec<_> = locals.iter().collect();
+        sorted_locals.sort();
+
+        for (i, var_name) in sorted_locals.into_iter().enumerate() {
             let var_ref = Variable::new(i);
             builder.declare_var(var_ref, types::I32);
             var_map.insert(var_name.clone(), var_ref);
         }
 
+        let mut terminated = false;
+
         for stmt in body {
-            Self::translate_stmt(&mut builder, stmt, &var_map, return_type);
+            terminated = Self::translate_stmt(&mut builder, stmt, &var_map, return_type);
+        }
+
+        if !terminated {
+            if return_type == "void" {
+                builder.ins().return_(&[]);
+            } else {
+                let zero = builder.ins().iconst(types::I32, 0);
+                builder.ins().return_(&[zero]);
+            }
         }
 
         builder.finalize();
-        self.module
-            .define_function(func_id, &mut self.ctx)
-            .expect("Definition error");
+
+        self.module.define_function(func_id, &mut self.ctx).unwrap();
         self.module.clear_context(&mut self.ctx);
     }
 
@@ -107,7 +123,7 @@ impl CraneliftAOTBackend {
         stmt: &Stmt,
         var_map: &HashMap<String, Variable>,
         return_type: &String,
-    ) {
+    ) -> bool {
         match stmt {
             Stmt::Let { name, value } => {
                 let val = Self::translate_expr(builder, value, var_map, return_type);
@@ -117,16 +133,19 @@ impl CraneliftAOTBackend {
                     .expect("Variable not found in map (Compiler/Parser desync)");
 
                 builder.def_var(*var_ref, val);
+                false
             }
             Stmt::Return { value } => {
                 let val = Self::translate_expr(builder, value, var_map, return_type);
+
                 if return_type == "int" {
                     builder.ins().return_(&[val]);
                 } else {
                     builder.ins().return_(&[]);
                 }
+                true
             }
-            _ => {}
+            _ => false,
         }
     }
 

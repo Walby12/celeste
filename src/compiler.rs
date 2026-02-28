@@ -2,8 +2,8 @@ use crate::tokens::*;
 use std::collections::HashSet;
 
 pub struct Compiler {
-    pub src: String,
-    pub line: u64,
+    pub src: Vec<u8>,
+    pub line: usize,
     pub index: usize,
     pub cur_tok: TokenType,
     pub locals: HashSet<String>,
@@ -12,7 +12,7 @@ pub struct Compiler {
 impl Compiler {
     pub fn new(src: String) -> Self {
         Self {
-            src: src,
+            src: src.into_bytes(),
             line: 1,
             index: 0,
             cur_tok: TokenType::Eof,

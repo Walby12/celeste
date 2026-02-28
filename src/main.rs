@@ -10,6 +10,7 @@ use std::fs::read_to_string;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::process::exit;
+use std::time::Instant;
 
 use crate::codegen::*;
 use crate::compiler::*;
@@ -27,6 +28,7 @@ struct Args {
 }
 
 fn main() {
+    let start_time = Instant::now();
     let args = Args::parse();
 
     let input_path = Path::new(&args.input);
@@ -102,4 +104,9 @@ fn main() {
     } else {
         eprintln!("Linking failed with code: {:?}", status.code());
     }
+
+    let duration = start_time.elapsed();
+
+    println!("------------------------------------------");
+    println!("Compilation finished in {:.4}s", duration.as_secs_f64());
 }

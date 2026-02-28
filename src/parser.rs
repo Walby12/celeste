@@ -65,7 +65,11 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     lexe(comp);
     let fn_return_type = if let TokenType::Ident(ref fn_type) = comp.cur_tok {
         match fn_type.as_str() {
-            "void" | "int" => fn_type.clone(),
+            "void" | "int" => {
+                let t = fn_type.clone();
+                lexe(comp);
+                t
+            }
             _ => {
                 eprintln!(
                     "error, line {}: unknow return type {:?}",
@@ -74,6 +78,8 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
                 exit(1);
             }
         }
+    } else if matches!(comp.cur_tok, TokenType::OpenCurly) {
+        "void".to_string()
     } else {
         eprintln!(
             "error, line {}: expected return type after ')', got {:?}",
@@ -90,7 +96,6 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
         exit(1);
     }
 
-    lexe(comp);
     if !matches!(comp.cur_tok, TokenType::OpenCurly) {
         eprintln!("error: expected {{");
         exit(1);
