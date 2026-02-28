@@ -1,0 +1,2 @@
+extrn fn printf(string, ..) int;
+extrn fn get_int() int;

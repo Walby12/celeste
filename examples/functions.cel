@@ -1,4 +1,4 @@
-extrn fn printf(string, string) void;
+include "io.cel";
 
 fn main() int {
     greet("user");

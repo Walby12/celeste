@@ -104,6 +104,13 @@ pub fn lexe(comp: &mut Compiler) {
                 return;
             }
         }
+        b'.' => {
+            if comp.index + 1 < comp.src.len() && comp.src[comp.index + 1] == b'.' {
+                comp.index += 2;
+                comp.cur_tok = TokenType::Ellipsis;
+                return;
+            }
+        }
         b',' => {
             comp.index += 1;
             comp.cur_tok = TokenType::Comma;
@@ -159,7 +166,7 @@ pub fn lexe(comp: &mut Compiler) {
 
     while comp.index < comp.src.len() {
         let curr = comp.src[comp.index];
-        if curr.is_ascii_whitespace() || b"{}();=+-*/\",".contains(&curr) {
+        if curr.is_ascii_whitespace() || b"{}();=+-*/\",.&".contains(&curr) {
             break;
         }
         comp.index += 1;
@@ -174,6 +181,7 @@ pub fn lexe(comp: &mut Compiler) {
         "return" => TokenType::Return,
         "mut" => TokenType::Mut,
         "extrn" => TokenType::Extrn,
+        "include" => TokenType::Include,
         _ if value.chars().all(|c| c.is_ascii_digit()) => {
             let n = value.parse::<i32>().unwrap_or(0);
             TokenType::Int(n)

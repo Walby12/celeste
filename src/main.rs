@@ -54,7 +54,7 @@ fn main() {
         }
     };
 
-    let mut comp = Compiler::new(src);
+    let mut comp = Compiler::new(src, input_path);
     let program = parser::parse(&mut comp);
 
     if args.dump_ast {
@@ -83,30 +83,49 @@ fn main() {
 
     println!("Success: Generated {}", output_str);
 
-    let exe_path = if args.output == "out" {
-        input_path.with_extension("exe")
+    let exe_extension = if cfg!(target_os = "windows") {
+        "exe"
     } else {
-        Path::new(&args.output).with_extension("exe")
+        ""
     };
-    let exe_str = exe_path
-        .to_str()
-        .expect("Output path contains invalid characters");
 
-    let status = Command::new("clang")
+    let exe_path = if args.output == "out" {
+        input_path.with_extension(exe_extension)
+    } else {
+        Path::new(&args.output).with_extension(exe_extension)
+    };
+
+    let exe_str = exe_path.to_str().expect("Invalid path");
+
+    let mut linker = Command::new("clang");
+    linker
         .arg(output_str)
+        .arg("stdlib/stdlib.c")
         .arg("-o")
-        .arg(exe_str)
-        .status()
-        .expect("Failed to execute link command");
+        .arg(exe_str);
+
+    if cfg!(target_os = "windows") {
+        linker
+            .arg("-lmsvcrt")
+            .arg("-llegacy_stdio_definitions")
+            .arg("-Wno-deprecated-declarations")
+            .arg("-D_CRT_SECURE_NO_WARNINGS")
+            .arg("-Wl,/NODEFAULTLIB:libcmt");
+    } else if cfg!(target_os = "macos") {
+        linker.arg("-lSystem");
+    } else {
+        linker.arg("-lc").arg("-lm");
+    }
+
+    let status = linker.status().expect("Failed to execute link command");
 
     if status.success() {
-        println!("Linking successful!");
+        println!("Linking successful! Created: {}", exe_str);
     } else {
         eprintln!("Linking failed with code: {:?}", status.code());
     }
 
     let duration = start_time.elapsed();
-
     println!("------------------------------------------");
     println!("Compilation finished in {:.4}s", duration.as_secs_f64());
 }

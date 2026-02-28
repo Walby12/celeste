@@ -1,3 +1,4 @@
+use cranelift::codegen::ir::StackSlot;
 use cranelift::prelude::*;
 use cranelift_module::FuncOrDataId;
 use cranelift_module::{DataDescription, Linkage, Module};
@@ -56,7 +57,6 @@ impl CraneliftAOTBackend {
                 } => {
                     let mut sig = self.module.make_signature();
                     sig.call_conv = default_conv;
-
                     for arg in arg_types {
                         sig.params.push(AbiParam::new(match arg {
                             CelesteType::Int => types::I32,
@@ -64,16 +64,13 @@ impl CraneliftAOTBackend {
                             _ => types::I32,
                         }));
                     }
-
                     if *return_type == CelesteType::Int {
                         sig.returns.push(AbiParam::new(types::I32));
                     }
-
                     self.module
                         .declare_function(name, Linkage::Import, &sig)
                         .unwrap();
                 }
-
                 Stmt::Function {
                     name,
                     params,
@@ -82,7 +79,6 @@ impl CraneliftAOTBackend {
                 } => {
                     let mut sig = self.module.make_signature();
                     sig.call_conv = default_conv;
-
                     for param in params {
                         sig.params.push(AbiParam::new(match param.ty {
                             CelesteType::Int => types::I32,
@@ -90,13 +86,9 @@ impl CraneliftAOTBackend {
                             _ => types::I32,
                         }));
                     }
-
                     if return_type == "int" {
                         sig.returns.push(AbiParam::new(types::I32));
-                    } else if return_type == "string" {
-                        sig.returns.push(AbiParam::new(ptr_type));
                     }
-
                     self.module
                         .declare_function(name, Linkage::Export, &sig)
                         .unwrap();
@@ -128,40 +120,21 @@ impl CraneliftAOTBackend {
         return_type: &String,
     ) {
         self.ctx.func.clear();
-        self.ctx.func.signature.params.clear();
-        self.ctx.func.signature.call_conv = self.module.target_config().default_call_conv;
-        self.ctx.func.signature.returns.clear();
+
+        let func_id = match self.module.get_name(name) {
+            Some(FuncOrDataId::Func(id)) => id,
+            _ => panic!("Function {} not declared", name),
+        };
+
+        let sig = self
+            .module
+            .declarations()
+            .get_function_decl(func_id)
+            .signature
+            .clone();
+        self.ctx.func.signature = sig;
 
         let ptr_type = self.module.target_config().pointer_type();
-
-        for param in params {
-            let ty = match param.ty {
-                CelesteType::Int => types::I32,
-                CelesteType::String => ptr_type,
-                _ => types::I32,
-            };
-            self.ctx.func.signature.params.push(AbiParam::new(ty));
-        }
-
-        if return_type == "int" {
-            self.ctx
-                .func
-                .signature
-                .returns
-                .push(AbiParam::new(types::I32));
-        } else if return_type == "string" {
-            self.ctx
-                .func
-                .signature
-                .returns
-                .push(AbiParam::new(ptr_type));
-        }
-
-        let func_id = self
-            .module
-            .declare_function(name, Linkage::Export, &self.ctx.func.signature)
-            .expect("Function declaration failed");
-
         let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
         let entry_block = builder.create_block();
 
@@ -169,27 +142,22 @@ impl CraneliftAOTBackend {
         builder.switch_to_block(entry_block);
         builder.seal_block(entry_block);
 
-        let mut var_map = HashMap::new();
-
-        let mut sorted_locals: Vec<_> = locals.iter().collect();
-        sorted_locals.sort_by_key(|(name, _)| *name);
-
-        for (i, (var_name, local)) in sorted_locals.into_iter().enumerate() {
-            let var_ref = Variable::new(i);
-            let cranelift_type = match local.ty {
-                CelesteType::Int => types::I32,
-                CelesteType::String => ptr_type,
-                CelesteType::Void => continue,
+        let mut stack_slots = HashMap::new();
+        for (var_name, local) in locals {
+            let size = match local.ty {
+                CelesteType::Int => 4,
+                CelesteType::String => ptr_type.bytes() as u32,
+                _ => 4,
             };
-
-            builder.declare_var(var_ref, cranelift_type);
-            var_map.insert(var_name.clone(), var_ref);
+            let slot = builder
+                .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, size));
+            stack_slots.insert(var_name.clone(), slot);
         }
 
         for (i, param) in params.iter().enumerate() {
-            if let Some(var_ref) = var_map.get(&param.name) {
+            if let Some(slot) = stack_slots.get(&param.name) {
                 let val = builder.block_params(entry_block)[i];
-                builder.def_var(*var_ref, val);
+                builder.ins().stack_store(val, *slot, 0);
             }
         }
 
@@ -198,7 +166,7 @@ impl CraneliftAOTBackend {
             terminated = Self::translate_stmt(
                 &mut builder,
                 stmt,
-                &var_map,
+                &stack_slots,
                 return_type,
                 &mut self.module,
                 &mut self.str_count,
@@ -206,66 +174,68 @@ impl CraneliftAOTBackend {
         }
 
         if !terminated {
-            match return_type.as_str() {
-                "void" => {
-                    builder.ins().return_(&[]);
-                }
-                "int" => {
-                    eprintln!(
-                        "error: function '{}' reaches end of non-void function without return",
-                        name
-                    );
-                    exit(1);
-                }
-                _ => {
-                    let null_ptr = builder.ins().iconst(ptr_type, 0);
-                    builder.ins().return_(&[null_ptr]);
-                }
+            if return_type == "void" {
+                builder.ins().return_(&[]);
+            } else {
+                let zero = builder.ins().iconst(types::I32, 0);
+                builder.ins().return_(&[zero]);
             }
         }
 
         builder.finalize();
-
         self.module.define_function(func_id, &mut self.ctx).unwrap();
-
         self.module.clear_context(&mut self.ctx);
     }
 
     fn translate_stmt(
         builder: &mut FunctionBuilder,
         stmt: &Stmt,
-        var_map: &HashMap<String, Variable>,
+        stack_slots: &HashMap<String, StackSlot>,
         return_type: &String,
         module: &mut ObjectModule,
         str_count: &mut usize,
     ) -> bool {
         match stmt {
             Stmt::Let { name, value } => {
-                let val =
-                    Self::translate_expr(builder, value, var_map, return_type, module, str_count);
-                let var_ref = var_map.get(name).expect("Variable missing in codegen");
-                builder.def_var(*var_ref, val);
+                let val = Self::translate_expr(
+                    builder,
+                    value,
+                    stack_slots,
+                    return_type,
+                    module,
+                    str_count,
+                );
+                let slot = stack_slots.get(name).expect("Variable missing");
+                builder.ins().stack_store(val, *slot, 0);
                 false
             }
             Stmt::Assign { name, value } => {
-                let val =
-                    Self::translate_expr(builder, value, var_map, return_type, module, str_count);
-                let var_ref = var_map.get(name).expect("Variable missing in codegen");
-                builder.def_var(*var_ref, val);
+                let val = Self::translate_expr(
+                    builder,
+                    value.as_ref(),
+                    stack_slots,
+                    return_type,
+                    module,
+                    str_count,
+                );
+                let slot = stack_slots.get(name).expect("Variable missing");
+                builder.ins().stack_store(val, *slot, 0);
                 false
             }
             Stmt::Return { value } => {
-                let val =
-                    Self::translate_expr(builder, value, var_map, return_type, module, str_count);
-                if return_type == "void" {
-                    builder.ins().return_(&[]);
-                } else {
-                    builder.ins().return_(&[val]);
-                }
+                let val = Self::translate_expr(
+                    builder,
+                    value,
+                    stack_slots,
+                    return_type,
+                    module,
+                    str_count,
+                );
+                builder.ins().return_(&[val]);
                 true
             }
             Stmt::Expression(expr) => {
-                Self::translate_expr(builder, expr, var_map, return_type, module, str_count);
+                Self::translate_expr(builder, expr, stack_slots, return_type, module, str_count);
                 false
             }
             _ => false,
@@ -275,20 +245,36 @@ impl CraneliftAOTBackend {
     fn translate_expr(
         builder: &mut FunctionBuilder,
         expr: &Expr,
-        var_map: &HashMap<String, Variable>,
+        stack_slots: &HashMap<String, StackSlot>,
         return_type: &String,
         module: &mut ObjectModule,
         str_count: &mut usize,
     ) -> Value {
+        let ptr_type = module.target_config().pointer_type();
+
         match expr {
             Expr::Integer(n) => builder.ins().iconst(types::I32, *n as i64),
             Expr::Variable(name) => {
-                let var = var_map.get(name).expect("Usage of undefined variable");
-                builder.use_var(*var)
+                let slot = stack_slots.get(name).expect("Undefined variable");
+                builder.ins().stack_load(types::I32, *slot, 0)
             }
             Expr::Binary { op, lhs, rhs } => {
-                let l = Self::translate_expr(builder, lhs, var_map, return_type, module, str_count);
-                let r = Self::translate_expr(builder, rhs, var_map, return_type, module, str_count);
+                let l = Self::translate_expr(
+                    builder,
+                    lhs.as_ref(),
+                    stack_slots,
+                    return_type,
+                    module,
+                    str_count,
+                );
+                let r = Self::translate_expr(
+                    builder,
+                    rhs.as_ref(),
+                    stack_slots,
+                    return_type,
+                    module,
+                    str_count,
+                );
                 match op {
                     '+' => builder.ins().iadd(l, r),
                     '-' => builder.ins().isub(l, r),
@@ -302,26 +288,20 @@ impl CraneliftAOTBackend {
                 let mut bytes = s.as_bytes().to_vec();
                 bytes.push(0);
                 data_ctx.define(bytes.into_boxed_slice());
-
                 let name = format!("str_{}", *str_count);
                 let data_id = module
                     .declare_data(&name, Linkage::Export, false, false)
-                    .expect("Failed to declare string data");
-
-                module
-                    .define_data(data_id, &data_ctx)
-                    .expect("Failed to define data");
+                    .unwrap();
+                module.define_data(data_id, &data_ctx).unwrap();
                 *str_count += 1;
-
                 let local_id = module.declare_data_in_func(data_id, &mut builder.func);
-                let pointer_type = module.target_config().pointer_type();
-                builder.ins().symbol_value(pointer_type, local_id)
+                builder.ins().symbol_value(ptr_type, local_id)
             }
             Expr::Call { name, args } => {
                 let func_id = match module.get_name(name) {
                     Some(FuncOrDataId::Func(id)) => id,
                     _ => {
-                        eprintln!("error: call to undeclared function '{}'", name);
+                        eprintln!("error: undeclared function '{}'", name);
                         exit(1);
                     }
                 };
@@ -331,21 +311,27 @@ impl CraneliftAOTBackend {
                 call_sig.call_conv = module.target_config().default_call_conv;
 
                 for arg in args {
-                    let val =
-                        Self::translate_expr(builder, arg, var_map, return_type, module, str_count);
+                    let val = Self::translate_expr(
+                        builder,
+                        arg,
+                        stack_slots,
+                        return_type,
+                        module,
+                        str_count,
+                    );
                     arg_values.push(val);
-
-                    let ty = builder.func.dfg.value_type(val);
-                    call_sig.params.push(AbiParam::new(ty));
+                    let arg_ty = builder.func.dfg.value_type(val);
+                    call_sig.params.push(AbiParam::new(arg_ty));
                 }
 
                 call_sig.returns.push(AbiParam::new(types::I32));
 
                 let sig_ref = builder.import_signature(call_sig);
-                let local_func = module.declare_func_in_func(func_id, &mut builder.func);
 
-                builder.func.dfg.ext_funcs[local_func].signature = sig_ref;
-                let call = builder.ins().call(local_func, &arg_values);
+                let local_func = module.declare_func_in_func(func_id, &mut builder.func);
+                let func_ptr = builder.ins().func_addr(ptr_type, local_func);
+
+                let call = builder.ins().call_indirect(sig_ref, func_ptr, &arg_values);
 
                 let results = builder.inst_results(call);
                 if results.is_empty() {
@@ -360,7 +346,6 @@ impl CraneliftAOTBackend {
     pub fn finalize_to_file(self, path: &str) {
         let product = self.module.finish();
         let bytes = product.emit().expect("Failed to emit bytes");
-
         let mut file = File::create(path).expect("File creation failed");
         file.write_all(&bytes).expect("Write failed");
     }

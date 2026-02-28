@@ -1,4 +1,4 @@
-extrn fn printf(string) void;
+include "io.cel";
 
 fn main() int {
     printf("Hello, World!\n");

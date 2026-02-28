@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::compiler::*;
 use crate::lexer::*;
 use crate::tokens::*;
+use std::path::Path;
 use std::process::*;
 
 pub fn parse(comp: &mut Compiler) -> Program {
@@ -9,10 +10,49 @@ pub fn parse(comp: &mut Compiler) -> Program {
     lexe(comp);
 
     while comp.cur_tok != TokenType::Eof {
-        let stmt = parse_top_level(comp);
-        stats.push(stmt);
+        if matches!(comp.cur_tok, TokenType::Include) {
+            let mut included_stmts = parse_include(comp);
+            stats.append(&mut included_stmts);
+        } else {
+            let stmt = parse_top_level(comp);
+            stats.push(stmt);
+        }
     }
     Program { stmts: stats }
+}
+
+fn parse_include(comp: &mut Compiler) -> Vec<Stmt> {
+    lexe(comp);
+    let include_path_str = if let TokenType::StringLiteral(ref s) = comp.cur_tok {
+        s.clone()
+    } else {
+        std::process::exit(1);
+    };
+    lexe(comp);
+    if matches!(comp.cur_tok, TokenType::Semicolon) {
+        lexe(comp);
+    }
+
+    let current_file_path = Path::new(&comp.filename);
+    let base_dir = current_file_path.parent().unwrap_or(Path::new("."));
+    let mut full_path = base_dir.join(&include_path_str);
+
+    if !full_path.exists() {
+        let stdlib_path = Path::new("stdlib").join(&include_path_str);
+        if stdlib_path.exists() {
+            full_path = stdlib_path;
+        } else {
+            eprintln!(
+                "error: could not find file '{}' locally or in stdlib",
+                include_path_str
+            );
+            std::process::exit(1);
+        }
+    }
+
+    let content = std::fs::read_to_string(&full_path).unwrap();
+    let mut sub_compiler = Compiler::new(content, &full_path);
+    parse(&mut sub_compiler).stmts
 }
 
 fn parse_top_level(comp: &mut Compiler) -> Stmt {
@@ -31,42 +71,42 @@ fn parse_top_level(comp: &mut Compiler) -> Stmt {
 
 fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     lexe(comp);
+
     comp.locals.clear();
 
     let fn_name = if let TokenType::Ident(ref name) = comp.cur_tok {
         name.clone()
     } else {
         eprintln!(
-            "error, line {}: expected identifier after fn keyword, got {:?}",
+            "error, line {}: expected identifier after fn, got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
     };
-
     lexe(comp);
+
     if !matches!(comp.cur_tok, TokenType::OpenParen) {
         eprintln!(
-            "error, line {}: expected '(' after the function name, got {:?}",
+            "error, line {}: expected '(', got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
     }
-
     lexe(comp);
-    let mut params = Vec::new();
 
+    let mut params = Vec::new();
     while !matches!(comp.cur_tok, TokenType::CloseParen) {
         let p_name = if let TokenType::Ident(ref name) = comp.cur_tok {
             name.clone()
         } else {
-            exit(1);
+            exit(1)
         };
         lexe(comp);
 
         let p_ty = if let TokenType::Ident(ref ty_str) = comp.cur_tok {
             string_to_celeste_type(ty_str)
         } else {
-            exit(1);
+            exit(1)
         };
         lexe(comp);
 
@@ -87,17 +127,9 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
             lexe(comp);
         }
     }
-
-    if !matches!(comp.cur_tok, TokenType::CloseParen) {
-        eprintln!(
-            "error, line {}: expected ')' after function arguments, got {:?}",
-            comp.line, comp.cur_tok
-        );
-        exit(1);
-    }
-
     lexe(comp);
-    let fn_return_type = if let TokenType::Ident(ref fn_type) = comp.cur_tok {
+
+    let fn_return_type_str = if let TokenType::Ident(ref fn_type) = comp.cur_tok {
         let t = fn_type.clone();
         lexe(comp);
         t
@@ -105,10 +137,14 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
         "void".to_string()
     };
 
+    let return_type = string_to_celeste_type(&fn_return_type_str);
+
+    comp.globals.insert(fn_name.clone(), return_type.clone());
+
     let mut func = Stmt::Function {
         name: fn_name,
         params,
-        return_type: fn_return_type,
+        return_type: fn_return_type_str,
         body: Vec::new(),
         locals: comp.locals.clone(),
     };
@@ -118,6 +154,7 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     if let Stmt::Function { ref mut locals, .. } = func {
         *locals = comp.locals.clone();
     }
+
     comp.locals.clear();
     func
 }
@@ -130,37 +167,29 @@ fn parse_extrn_decl(comp: &mut Compiler) -> Stmt {
         exit(1);
     }
     lexe(comp);
-
     let fn_name = if let TokenType::Ident(ref name) = comp.cur_tok {
         name.clone()
     } else {
-        eprintln!(
-            "error, line {}: expected function name after 'fn' in extern statement",
-            comp.line
-        );
         exit(1);
     };
     lexe(comp);
 
     if !matches!(comp.cur_tok, TokenType::OpenParen) {
-        eprintln!("error, line {}: expected '('", comp.line);
         exit(1);
     }
     lexe(comp);
 
     let mut arg_types = Vec::new();
 
-    while !matches!(comp.cur_tok, TokenType::CloseParen) && !matches!(comp.cur_tok, TokenType::Eof)
-    {
+    while !matches!(comp.cur_tok, TokenType::CloseParen) {
+        if matches!(comp.cur_tok, TokenType::Ellipsis) {
+            lexe(comp);
+            break;
+        }
+
         if let TokenType::Ident(ref ty_str) = comp.cur_tok {
             arg_types.push(string_to_celeste_type(ty_str));
             lexe(comp);
-        } else {
-            eprintln!(
-                "error, line {}: expected type name in extern args",
-                comp.line
-            );
-            exit(1);
         }
 
         if matches!(comp.cur_tok, TokenType::Comma) {
@@ -185,17 +214,14 @@ fn parse_extrn_decl(comp: &mut Compiler) -> Stmt {
     if matches!(comp.cur_tok, TokenType::Semicolon) {
         lexe(comp);
     } else {
-        eprintln!("error, line {}: expected ';' after extern", comp.line);
+        eprintln!(
+            "error, line {}: expected ';' after extern declaration",
+            comp.line
+        );
         exit(1);
     }
 
-    comp.locals.insert(
-        fn_name.clone(),
-        Local {
-            ty: return_type.clone(),
-            is_mutable: false,
-        },
-    );
+    comp.globals.insert(fn_name.clone(), return_type.clone());
 
     Stmt::Extern {
         name: fn_name,

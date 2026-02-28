@@ -7,6 +7,8 @@ pub enum TokenType {
     Mut,
     Extrn,
     Comma,
+    Include,
+    Ellipsis,
     OpenCurly,
     CloseCurly,
     OpenParen,
