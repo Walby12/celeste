@@ -1,19 +1,19 @@
-# celeste compiler
+# Celeste Compiler
 
-A lightweight Ahead-of-Time (AOT) compiler built in Rust using the **Cranelift** code generation framework. celeste compiles `.cel` files into native executables.
+A lightweight, high-performance Ahead-of-Time (AOT) compiler built in Rust. Celeste leverages the **Cranelift** code generation framework to turn `.cel` source code into optimized native executables.
 
 > [!WARNING]
-> **Project Status: Experimental** > This compiler is currently a proof-of-concept and is in early development. It is **not** intended for production use. The syntax and backend implementation are subject to frequent breaking changes.
+> **Project Status: Experimental** > Celeste is currently in early development. While it supports fundamental programming constructs, the syntax and ABI are subject to frequent changes as the language evolves.
 
 ## Features
-- **Fast Compilation**: Powered by Cranelift.
-- **AST Dumping**: Visualize the compiler's intermediate representation.
-- **Auto-Linking**: Automatically invokes `clang` to produce final executables.
+
+- ** Blazing Fast**: High-speed machine code generation via Cranelift.
+- ** Seamless C Interop**: Easily call functions from the C standard library (printf, scanf, etc.) using `extrn`.
+- ** Integrated Toolchain**: Automatically handles the transition from source -> object file -> linked executable via `clang`.
+- ** Debug Ready**: Built-in AST dumping to visualize how your code is parsed and structured.
+
+---
 
 ## Prerequisites
 - **Rust**: For building the compiler
 - **LLVM/Clang**: Required for linking object files. (Ensure `clang` is in your PATH).
-
-## Quick start
-
-Take a look at the files in the examples directory
