@@ -161,6 +161,17 @@ impl CraneliftAOTBackend {
                 let var = var_map.get(name).expect("Usage of undefined variable");
                 builder.use_var(*var)
             }
+            Expr::Binary { op, lhs, rhs } => {
+                let l = Self::translate_expr(builder, lhs, var_map, return_type);
+                let r = Self::translate_expr(builder, rhs, var_map, return_type);
+                match op {
+                    '+' => builder.ins().iadd(l, r),
+                    '-' => builder.ins().isub(l, r),
+                    '*' => builder.ins().imul(l, r),
+                    '/' => builder.ins().sdiv(l, r),
+                    _ => unreachable!(),
+                }
+            }
         }
     }
 

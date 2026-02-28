@@ -52,6 +52,26 @@ pub fn lexe(comp: &mut Compiler) {
             comp.cur_tok = TokenType::Semicolon;
             return;
         }
+        b'+' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::Plus;
+            return;
+        }
+        b'-' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::Minus;
+            return;
+        }
+        b'*' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::Star;
+            return;
+        }
+        b'/' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::Slash;
+            return;
+        }
         _ => {}
     }
 

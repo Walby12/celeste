@@ -194,22 +194,7 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
     }
     lexe(comp);
 
-    let value_expr = if let TokenType::Int(ref num) = comp.cur_tok {
-        Expr::Integer(num.clone())
-    } else if let TokenType::Ident(ref name) = comp.cur_tok {
-        if !comp.locals.contains(name) {
-            eprintln!("error, line {}: unknow variable: '{}'", comp.line, name);
-            exit(1);
-        }
-        Expr::Variable(name.clone())
-    } else {
-        eprintln!(
-            "error, line {}: expected an integer or a variable after '=', got {:?}",
-            comp.line, comp.cur_tok
-        );
-        exit(1);
-    };
-    lexe(comp);
+    let value_expr = parse_expr(comp);
 
     if matches!(comp.cur_tok, TokenType::Semicolon) {
         lexe(comp);
@@ -237,45 +222,110 @@ fn parse_return_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
         false
     };
 
-    let return_val = if is_void {
+    if is_void {
         if !matches!(comp.cur_tok, TokenType::Semicolon) {
             eprintln!(
-                "error, line {}: in void returning function, expected empty return statement",
+                "error, line {}: expected an empty return statement for void function",
                 comp.line
             );
             exit(1);
         }
-        Expr::Integer(0)
-    } else {
-        let val = match &comp.cur_tok {
-            TokenType::Ident(name) => {
-                if !comp.locals.contains(name) {
-                    eprintln!("error, line {}: undefined variable '{}'", comp.line, name);
-                    exit(1);
-                }
-                Expr::Variable(name.clone())
-            }
-            TokenType::Int(value) => Expr::Integer(*value),
-            _ => {
-                eprintln!(
-                    "error, line {}: expected variable or literal for return statement, got {:?}",
-                    comp.line, comp.cur_tok
-                );
-                exit(1);
-            }
+
+        lexe(comp);
+        return Stmt::Return {
+            value: Expr::Integer(0),
+        };
+    }
+
+    let return_val = parse_expr(comp);
+
+    if matches!(comp.cur_tok, TokenType::Semicolon) {
+        lexe(comp);
+    }
+    Stmt::Return { value: return_val }
+}
+
+fn parse_expr(comp: &mut Compiler) -> Expr {
+    parse_additive(comp)
+}
+
+fn parse_additive(comp: &mut Compiler) -> Expr {
+    let mut lhs = parse_multiplicative(comp);
+
+    while matches!(comp.cur_tok, TokenType::Plus | TokenType::Minus) {
+        let op = if matches!(comp.cur_tok, TokenType::Plus) {
+            '+'
+        } else {
+            '-'
         };
         lexe(comp);
-        val
-    };
-
-    if !matches!(comp.cur_tok, TokenType::Semicolon) {
-        eprintln!(
-            "error, line {}: expected ';' after return, got {:?}",
-            comp.line, comp.cur_tok
-        );
-        exit(1);
+        let rhs = parse_multiplicative(comp);
+        lhs = Expr::Binary {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        };
     }
-    lexe(comp);
+    lhs
+}
 
-    Stmt::Return { value: return_val }
+fn parse_multiplicative(comp: &mut Compiler) -> Expr {
+    let mut lhs = parse_primary(comp);
+
+    while matches!(comp.cur_tok, TokenType::Star | TokenType::Slash) {
+        let op = if matches!(comp.cur_tok, TokenType::Star) {
+            '*'
+        } else {
+            '/'
+        };
+        lexe(comp);
+
+        let rhs = parse_primary(comp);
+        lhs = Expr::Binary {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        };
+    }
+    lhs
+}
+
+fn parse_primary(comp: &mut Compiler) -> Expr {
+    match comp.cur_tok.clone() {
+        TokenType::Int(n) => {
+            lexe(comp);
+            Expr::Integer(n)
+        }
+        TokenType::Ident(name) => {
+            if !comp.locals.contains(&name) {
+                eprintln!("error, line {}: unknown variable '{}'", comp.line, name);
+                std::process::exit(1);
+            }
+            lexe(comp);
+            Expr::Variable(name)
+        }
+        TokenType::OpenParen => {
+            lexe(comp);
+
+            let expr = parse_expr(comp);
+
+            if !matches!(comp.cur_tok, TokenType::CloseParen) {
+                eprintln!(
+                    "error, line {}: expected ')', got {:?}",
+                    comp.line, comp.cur_tok
+                );
+                std::process::exit(1);
+            }
+            lexe(comp);
+
+            expr
+        }
+        _ => {
+            eprintln!(
+                "error, line {}: expected integer or variable, got {:?}",
+                comp.line, comp.cur_tok
+            );
+            std::process::exit(1);
+        }
+    }
 }

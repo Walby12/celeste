@@ -9,6 +9,11 @@ pub struct Program {
 pub enum Expr {
     Variable(String),
     Integer(i32),
+    Binary {
+        op: char,
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
 }
 
 #[derive(Debug)]

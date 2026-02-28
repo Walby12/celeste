@@ -1,4 +1,4 @@
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub enum TokenType {
     Ident(String),
     Int(i32),
@@ -11,5 +11,9 @@ pub enum TokenType {
     Fn,
     Let,
     Return,
+    Plus,
+    Minus,
+    Star,
+    Slash,
     Eof,
 }
