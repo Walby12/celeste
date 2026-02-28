@@ -135,7 +135,7 @@ fn parse_extrn_decl(comp: &mut Compiler) -> Stmt {
         name.clone()
     } else {
         eprintln!(
-            "error, line {}: expected identifier for extern function",
+            "error, line {}: expected function name after 'fn' in extern statement",
             comp.line
         );
         exit(1);
@@ -232,13 +232,13 @@ fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
         TokenType::Let => parse_let_stmt(comp),
         TokenType::Return => parse_return_stmt(comp, func),
         TokenType::Ident(_) => {
-            let (expr, expr_type) = parse_expr(comp);
+            let (expr, _) = parse_expr(comp);
 
             if matches!(comp.cur_tok, TokenType::Equals) {
                 if let Expr::Variable(name) = expr {
                     lexe(comp);
 
-                    let (value_expr, value_type) = parse_expr(comp);
+                    let (value_expr, _) = parse_expr(comp);
 
                     let local = comp.locals.get(&name).cloned().unwrap_or_else(|| {
                         eprintln!("error: undefined variable '{}'", name);
@@ -380,63 +380,6 @@ fn parse_return_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
     Stmt::Return { value: val_expr }
 }
 
-fn parse_assign_stmt(comp: &mut Compiler) -> Stmt {
-    let var_name = if let TokenType::Ident(ref name) = comp.cur_tok {
-        name.clone()
-    } else {
-        exit(1);
-    };
-
-    let local = comp.locals.get(&var_name).cloned().unwrap_or_else(|| {
-        eprintln!(
-            "error, line {}: cannot assign to undefined variable '{}'",
-            comp.line, var_name
-        );
-        exit(1);
-    });
-
-    if !local.is_mutable {
-        eprintln!(
-            "error, line {}: cannot assign to immutable variable '{}', (try adding mut)",
-            comp.line, var_name
-        );
-        exit(1);
-    }
-
-    lexe(comp);
-
-    if !matches!(comp.cur_tok, TokenType::Equals) {
-        eprintln!(
-            "error, line {}: expected '=' after variable name",
-            comp.line
-        );
-        exit(1);
-    }
-    lexe(comp);
-
-    let (value_expr, value_type) = parse_expr(comp);
-
-    if value_type != local.ty {
-        eprintln!(
-            "error, line {}: type mismatch. Variable '{}' is {:?}, cannot assign {:?}",
-            comp.line, var_name, local.ty, value_type
-        );
-        exit(1);
-    }
-
-    if matches!(comp.cur_tok, TokenType::Semicolon) {
-        lexe(comp);
-    } else {
-        eprintln!("error, line {}: expected ';' after assignment", comp.line);
-        exit(1);
-    }
-
-    Stmt::Assign {
-        name: var_name,
-        value: Box::new(value_expr),
-    }
-}
-
 fn parse_expr(comp: &mut Compiler) -> (Expr, CelesteType) {
     parse_additive(comp)
 }
@@ -564,9 +507,6 @@ fn string_to_celeste_type(s: &str) -> CelesteType {
     match s.trim() {
         "int" => CelesteType::Int,
         "string" => CelesteType::String,
-        _ => {
-            println!("DEBUG: Failed to match type string: '{}'", s);
-            CelesteType::Void
-        }
+        _ => CelesteType::Void,
     }
 }

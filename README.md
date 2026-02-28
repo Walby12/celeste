@@ -13,3 +13,7 @@ A lightweight Ahead-of-Time (AOT) compiler built in Rust using the **Cranelift**
 ## Prerequisites
 - **Rust**: For building the compiler
 - **LLVM/Clang**: Required for linking object files. (Ensure `clang` is in your PATH).
+
+## Quick start
+
+Take a look at the files in the examples directory

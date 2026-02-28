@@ -1,0 +1,10 @@
+extrn fn printf(string, string) void;
+
+fn main() int {
+    greet("user");
+    return 0;
+}
+
+fn greet(name string) {
+    printf("Hello %s\n", name);
+}
