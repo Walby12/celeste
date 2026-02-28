@@ -2,7 +2,9 @@
 pub enum TokenType {
     Ident(String),
     Int(i32),
+    StringLiteral(String),
     Equals,
+    Mut,
     OpenCurly,
     CloseCurly,
     OpenParen,

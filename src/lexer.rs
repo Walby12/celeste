@@ -72,6 +72,31 @@ pub fn lexe(comp: &mut Compiler) {
             comp.cur_tok = TokenType::Slash;
             return;
         }
+        b'"' => {
+            comp.index += 1;
+            let start = comp.index;
+            let mut closed = false;
+
+            while comp.index < comp.src.len() {
+                if comp.src[comp.index] == b'"' {
+                    closed = true;
+                    break;
+                }
+                comp.index += 1;
+            }
+
+            if !closed {
+                eprintln!("error, line {}: unclosed string literal", comp.line);
+                std::process::exit(1);
+            }
+
+            let slice = &comp.src[start..comp.index];
+            let s = std::str::from_utf8(slice).unwrap_or("").to_string();
+
+            comp.index += 1;
+            comp.cur_tok = TokenType::StringLiteral(s);
+            return;
+        }
         _ => {}
     }
 
@@ -79,7 +104,7 @@ pub fn lexe(comp: &mut Compiler) {
 
     while comp.index < comp.src.len() {
         let curr = comp.src[comp.index];
-        if curr.is_ascii_whitespace() || b"{}();=".contains(&curr) {
+        if curr.is_ascii_whitespace() || b"{}();=+-*/\"".contains(&curr) {
             break;
         }
         comp.index += 1;
@@ -92,6 +117,7 @@ pub fn lexe(comp: &mut Compiler) {
         "fn" => TokenType::Fn,
         "let" => TokenType::Let,
         "return" => TokenType::Return,
+        "mut" => TokenType::Mut,
         _ if value.chars().all(|c| c.is_ascii_digit()) => {
             let n = value.parse::<i32>().unwrap_or(0);
             TokenType::Int(n)

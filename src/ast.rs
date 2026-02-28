@@ -1,4 +1,12 @@
-use std::collections::HashSet;
+use crate::compiler::*;
+use std::collections::HashMap;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum CelesteType {
+    Int,
+    String,
+    Void,
+}
 
 #[derive(Debug)]
 pub struct Program {
@@ -9,6 +17,7 @@ pub struct Program {
 pub enum Expr {
     Variable(String),
     Integer(i32),
+    StringLiteral(String),
     Binary {
         op: char,
         lhs: Box<Expr>,
@@ -26,9 +35,13 @@ pub enum Stmt {
         name: String,
         return_type: String,
         body: Vec<Stmt>,
-        locals: HashSet<String>,
+        locals: HashMap<String, Local>,
     },
     Return {
         value: Expr,
+    },
+    Assign {
+        name: String,
+        value: Box<Expr>,
     },
 }

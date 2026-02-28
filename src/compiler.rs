@@ -1,12 +1,20 @@
+use crate::ast::*;
 use crate::tokens::*;
-use std::collections::HashSet;
+
+use std::collections::HashMap;
+
+#[derive(Debug, Clone)]
+pub struct Local {
+    pub ty: CelesteType,
+    pub is_mutable: bool,
+}
 
 pub struct Compiler {
     pub src: Vec<u8>,
     pub line: usize,
     pub index: usize,
     pub cur_tok: TokenType,
-    pub locals: HashSet<String>,
+    pub locals: HashMap<String, Local>,
 }
 
 impl Compiler {
@@ -16,7 +24,7 @@ impl Compiler {
             line: 1,
             index: 0,
             cur_tok: TokenType::Eof,
-            locals: HashSet::new(),
+            locals: HashMap::new(),
         }
     }
 }

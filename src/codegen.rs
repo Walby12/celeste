@@ -1,17 +1,19 @@
 use cranelift::prelude::*;
-use cranelift_module::{Linkage, Module};
+use cranelift_module::{DataDescription, Linkage, Module};
 use cranelift_native::builder as native_builder;
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 
 use crate::ast::*;
+use crate::compiler::*;
 
 pub struct CraneliftAOTBackend {
     builder_context: FunctionBuilderContext,
     ctx: codegen::Context,
     module: ObjectModule,
+    str_count: usize,
 }
 
 impl CraneliftAOTBackend {
@@ -35,6 +37,7 @@ impl CraneliftAOTBackend {
             builder_context: FunctionBuilderContext::new(),
             ctx: module.make_context(),
             module,
+            str_count: 0,
         }
     }
 
@@ -60,12 +63,14 @@ impl CraneliftAOTBackend {
         &mut self,
         name: &str,
         body: &[Stmt],
-        locals: &HashSet<String>,
+        locals: &HashMap<String, Local>,
         return_type: &String,
     ) {
         self.ctx.func.clear();
         self.ctx.func.signature.params.clear();
         self.ctx.func.signature.returns.clear();
+
+        let ptr_type = self.module.target_config().pointer_type();
 
         if return_type == "int" {
             self.ctx
@@ -73,6 +78,12 @@ impl CraneliftAOTBackend {
                 .signature
                 .returns
                 .push(AbiParam::new(types::I32));
+        } else if return_type == "string" {
+            self.ctx
+                .func
+                .signature
+                .returns
+                .push(AbiParam::new(ptr_type));
         }
 
         let func_id = self
@@ -89,18 +100,31 @@ impl CraneliftAOTBackend {
 
         let mut var_map = HashMap::new();
         let mut sorted_locals: Vec<_> = locals.iter().collect();
-        sorted_locals.sort();
+        sorted_locals.sort_by_key(|(name, _)| *name);
 
-        for (i, var_name) in sorted_locals.into_iter().enumerate() {
+        for (i, (var_name, local)) in sorted_locals.into_iter().enumerate() {
             let var_ref = Variable::new(i);
-            builder.declare_var(var_ref, types::I32);
+
+            let cranelift_type = match local.ty {
+                CelesteType::Int => types::I32,
+                CelesteType::String => ptr_type,
+                CelesteType::Void => continue,
+            };
+
+            builder.declare_var(var_ref, cranelift_type);
             var_map.insert(var_name.clone(), var_ref);
         }
 
         let mut terminated = false;
-
         for stmt in body {
-            terminated = Self::translate_stmt(&mut builder, stmt, &var_map, return_type);
+            terminated = Self::translate_stmt(
+                &mut builder,
+                stmt,
+                &var_map,
+                return_type,
+                &mut self.module,
+                &mut self.str_count,
+            );
         }
 
         if !terminated {
@@ -113,7 +137,6 @@ impl CraneliftAOTBackend {
         }
 
         builder.finalize();
-
         self.module.define_function(func_id, &mut self.ctx).unwrap();
         self.module.clear_context(&mut self.ctx);
     }
@@ -123,25 +146,31 @@ impl CraneliftAOTBackend {
         stmt: &Stmt,
         var_map: &HashMap<String, Variable>,
         return_type: &String,
+        module: &mut ObjectModule,
+        str_count: &mut usize,
     ) -> bool {
         match stmt {
             Stmt::Let { name, value } => {
-                let val = Self::translate_expr(builder, value, var_map, return_type);
-
-                let var_ref = var_map
-                    .get(name)
-                    .expect("Variable not found in map (Compiler/Parser desync)");
-
+                let val =
+                    Self::translate_expr(builder, value, var_map, return_type, module, str_count);
+                let var_ref = var_map.get(name).expect("Variable missing in codegen");
+                builder.def_var(*var_ref, val);
+                false
+            }
+            Stmt::Assign { name, value } => {
+                let val =
+                    Self::translate_expr(builder, value, var_map, return_type, module, str_count);
+                let var_ref = var_map.get(name).expect("Variable missing in codegen");
                 builder.def_var(*var_ref, val);
                 false
             }
             Stmt::Return { value } => {
-                let val = Self::translate_expr(builder, value, var_map, return_type);
-
-                if return_type == "int" {
-                    builder.ins().return_(&[val]);
-                } else {
+                let val =
+                    Self::translate_expr(builder, value, var_map, return_type, module, str_count);
+                if return_type == "void" {
                     builder.ins().return_(&[]);
+                } else {
+                    builder.ins().return_(&[val]);
                 }
                 true
             }
@@ -154,6 +183,8 @@ impl CraneliftAOTBackend {
         expr: &Expr,
         var_map: &HashMap<String, Variable>,
         return_type: &String,
+        module: &mut ObjectModule,
+        str_count: &mut usize,
     ) -> Value {
         match expr {
             Expr::Integer(n) => builder.ins().iconst(types::I32, *n as i64),
@@ -162,8 +193,8 @@ impl CraneliftAOTBackend {
                 builder.use_var(*var)
             }
             Expr::Binary { op, lhs, rhs } => {
-                let l = Self::translate_expr(builder, lhs, var_map, return_type);
-                let r = Self::translate_expr(builder, rhs, var_map, return_type);
+                let l = Self::translate_expr(builder, lhs, var_map, return_type, module, str_count);
+                let r = Self::translate_expr(builder, rhs, var_map, return_type, module, str_count);
                 match op {
                     '+' => builder.ins().iadd(l, r),
                     '-' => builder.ins().isub(l, r),
@@ -171,6 +202,26 @@ impl CraneliftAOTBackend {
                     '/' => builder.ins().sdiv(l, r),
                     _ => unreachable!(),
                 }
+            }
+            Expr::StringLiteral(s) => {
+                let mut data_ctx = DataDescription::new();
+                let mut bytes = s.as_bytes().to_vec();
+                bytes.push(0); // Null terminator
+                data_ctx.define(bytes.into_boxed_slice());
+
+                let name = format!("str_{}", *str_count);
+                let data_id = module
+                    .declare_data(&name, Linkage::Export, false, false)
+                    .expect("Failed to declare string data");
+
+                module
+                    .define_data(data_id, &data_ctx)
+                    .expect("Failed to define data");
+                *str_count += 1;
+
+                let local_id = module.declare_data_in_func(data_id, &mut builder.func);
+                let pointer_type = module.target_config().pointer_type();
+                builder.ins().symbol_value(pointer_type, local_id)
             }
         }
     }
