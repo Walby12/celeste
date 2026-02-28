@@ -1,0 +1,21 @@
+include "io.cel";
+
+fn main() int {
+    printf("--- Welcome to the Celeste Logic Test ---\n");
+    printf("Enter a secret number: ");
+
+    let input = get_int();
+
+    if (input == 7) {
+        printf("Lucky number 7! You win.\n");
+    } else if (input < 0) {
+        printf("That is a negative outlook...\n");
+    } else if (input > 100) {
+        printf("Whoa, that is a huge number!\n");
+    } else {
+        printf("Just a boring regular number, huh?\n");
+    }
+
+    printf("Program finished. Returning 0.\n");
+    return 0;
+}

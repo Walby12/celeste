@@ -24,7 +24,22 @@ pub fn lexe(comp: &mut Compiler) {
     match c {
         b'=' => {
             comp.index += 1;
-            comp.cur_tok = TokenType::Equals;
+            if comp.index < comp.src.len() && comp.src[comp.index] == b'=' {
+                comp.index += 1;
+                comp.cur_tok = TokenType::DoubleEquals;
+            } else {
+                comp.cur_tok = TokenType::Equals;
+            }
+            return;
+        }
+        b'<' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::Less;
+            return;
+        }
+        b'>' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::Greater;
             return;
         }
         b'{' => {
@@ -166,7 +181,7 @@ pub fn lexe(comp: &mut Compiler) {
 
     while comp.index < comp.src.len() {
         let curr = comp.src[comp.index];
-        if curr.is_ascii_whitespace() || b"{}();=+-*/\",.&".contains(&curr) {
+        if curr.is_ascii_whitespace() || b"{}();=+-*/\",.&<>".contains(&curr) {
             break;
         }
         comp.index += 1;
@@ -182,6 +197,8 @@ pub fn lexe(comp: &mut Compiler) {
         "mut" => TokenType::Mut,
         "extrn" => TokenType::Extrn,
         "include" => TokenType::Include,
+        "if" => TokenType::If,
+        "else" => TokenType::Else,
         _ if value.chars().all(|c| c.is_ascii_digit()) => {
             let n = value.parse::<i32>().unwrap_or(0);
             TokenType::Int(n)

@@ -60,5 +60,11 @@ pub enum Stmt {
         arg_types: Vec<CelesteType>,
         return_type: CelesteType,
     },
+    If {
+        condition: Expr,
+        then_block: Vec<Stmt>,
+        else_ifs: Vec<(Expr, Vec<Stmt>)>,
+        else_block: Option<Vec<Stmt>>,
+    },
     Expression(Expr),
 }

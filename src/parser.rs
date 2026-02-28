@@ -257,6 +257,7 @@ fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
     match comp.cur_tok {
         TokenType::Let => parse_let_stmt(comp),
         TokenType::Return => parse_return_stmt(comp, func),
+        TokenType::If => parse_if_stmt(comp, func),
         TokenType::Ident(_) => {
             let (expr, _) = parse_expr(comp);
 
@@ -303,6 +304,84 @@ fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
             exit(1);
         }
     }
+}
+
+fn parse_if_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
+    lexe(comp);
+
+    if !matches!(comp.cur_tok, TokenType::OpenParen) {
+        eprintln!("error line {}: expected '(' after 'if'", comp.line);
+        exit(1);
+    }
+    lexe(comp);
+
+    let (condition, _) = parse_expr(comp);
+
+    if !matches!(comp.cur_tok, TokenType::CloseParen) {
+        eprintln!(
+            "error line {}: expected ')' after if condition, got {:?}",
+            comp.line, comp.cur_tok
+        );
+        exit(1);
+    }
+    lexe(comp);
+
+    let then_block = parse_block_as_vec(comp, func);
+
+    let mut else_ifs = Vec::new();
+    let mut else_block = None;
+
+    while matches!(comp.cur_tok, TokenType::Else) {
+        lexe(comp);
+
+        if matches!(comp.cur_tok, TokenType::If) {
+            lexe(comp);
+
+            if !matches!(comp.cur_tok, TokenType::OpenParen) {
+                exit(1);
+            }
+            lexe(comp);
+            let (ei_cond, _) = parse_expr(comp);
+            if !matches!(comp.cur_tok, TokenType::CloseParen) {
+                exit(1);
+            }
+            lexe(comp);
+
+            let ei_body = parse_block_as_vec(comp, func);
+            else_ifs.push((ei_cond, ei_body));
+        } else {
+            else_block = Some(parse_block_as_vec(comp, func));
+            break;
+        }
+    }
+
+    Stmt::If {
+        condition,
+        then_block,
+        else_ifs,
+        else_block,
+    }
+}
+
+fn parse_block_as_vec(comp: &mut Compiler, func: &Stmt) -> Vec<Stmt> {
+    if !matches!(comp.cur_tok, TokenType::OpenCurly) {
+        eprintln!("error line {}: expected '{{' to start block", comp.line);
+        exit(1);
+    }
+    lexe(comp);
+
+    let mut body = Vec::new();
+    while comp.cur_tok != TokenType::CloseCurly && comp.cur_tok != TokenType::Eof {
+        body.push(parse_stmt(comp, func));
+    }
+
+    if !matches!(comp.cur_tok, TokenType::CloseCurly) {
+        eprintln!("error line {}: expected '}}' at end of block", comp.line);
+        exit(1);
+    }
+    lexe(comp);
+
+    body
 }
 
 fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
@@ -407,7 +486,38 @@ fn parse_return_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
 }
 
 fn parse_expr(comp: &mut Compiler) -> (Expr, CelesteType) {
-    parse_additive(comp)
+    parse_comparison(comp)
+}
+
+fn parse_comparison(comp: &mut Compiler) -> (Expr, CelesteType) {
+    let (mut lhs, mut lhs_ty) = parse_additive(comp);
+
+    while matches!(
+        comp.cur_tok,
+        TokenType::Less | TokenType::Greater | TokenType::DoubleEquals
+    ) {
+        let op = match comp.cur_tok {
+            TokenType::Less => '<',
+            TokenType::Greater => '>',
+            TokenType::DoubleEquals => '=',
+            _ => break,
+        };
+        lexe(comp);
+        let (rhs, rhs_ty) = parse_additive(comp);
+
+        if lhs_ty != CelesteType::Int || rhs_ty != CelesteType::Int {
+            eprintln!("error, line {}: Comparison requires Integers.", comp.line);
+            exit(1);
+        }
+
+        lhs = Expr::Binary {
+            op,
+            lhs: Box::new(lhs),
+            rhs: Box::new(rhs),
+        };
+        lhs_ty = CelesteType::Int;
+    }
+    (lhs, lhs_ty)
 }
 
 fn parse_additive(comp: &mut Compiler) -> (Expr, CelesteType) {

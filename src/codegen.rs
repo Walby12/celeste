@@ -238,6 +238,110 @@ impl CraneliftAOTBackend {
                 Self::translate_expr(builder, expr, stack_slots, return_type, module, str_count);
                 false
             }
+            Stmt::If {
+                condition,
+                then_block,
+                else_ifs,
+                else_block,
+            } => {
+                let merge_block = builder.create_block();
+
+                let mut next_test_block = builder.create_block();
+                let cond_val = Self::translate_expr(
+                    builder,
+                    condition,
+                    stack_slots,
+                    return_type,
+                    module,
+                    str_count,
+                );
+
+                let then_body_block = builder.create_block();
+                builder
+                    .ins()
+                    .brif(cond_val, then_body_block, &[], next_test_block, &[]);
+
+                builder.switch_to_block(then_body_block);
+                builder.seal_block(then_body_block);
+                let mut then_terminated = false;
+                for stmt in then_block {
+                    then_terminated |= Self::translate_stmt(
+                        builder,
+                        stmt,
+                        stack_slots,
+                        return_type,
+                        module,
+                        str_count,
+                    );
+                }
+                if !then_terminated {
+                    builder.ins().jump(merge_block, &[]);
+                }
+
+                for (ei_cond, ei_body) in else_ifs {
+                    builder.switch_to_block(next_test_block);
+                    builder.seal_block(next_test_block);
+
+                    let ei_cond_val = Self::translate_expr(
+                        builder,
+                        ei_cond,
+                        stack_slots,
+                        return_type,
+                        module,
+                        str_count,
+                    );
+                    let ei_body_block = builder.create_block();
+                    let ei_next_test = builder.create_block();
+
+                    builder
+                        .ins()
+                        .brif(ei_cond_val, ei_body_block, &[], ei_next_test, &[]);
+
+                    builder.switch_to_block(ei_body_block);
+                    builder.seal_block(ei_body_block);
+                    let mut ei_terminated = false;
+                    for stmt in ei_body {
+                        ei_terminated |= Self::translate_stmt(
+                            builder,
+                            stmt,
+                            stack_slots,
+                            return_type,
+                            module,
+                            str_count,
+                        );
+                    }
+                    if !ei_terminated {
+                        builder.ins().jump(merge_block, &[]);
+                    }
+                    next_test_block = ei_next_test;
+                }
+
+                builder.switch_to_block(next_test_block);
+                builder.seal_block(next_test_block);
+                if let Some(body) = else_block {
+                    let mut else_terminated = false;
+                    for stmt in body {
+                        else_terminated |= Self::translate_stmt(
+                            builder,
+                            stmt,
+                            stack_slots,
+                            return_type,
+                            module,
+                            str_count,
+                        );
+                    }
+                    if !else_terminated {
+                        builder.ins().jump(merge_block, &[]);
+                    }
+                } else {
+                    builder.ins().jump(merge_block, &[]);
+                }
+
+                builder.switch_to_block(merge_block);
+                builder.seal_block(merge_block);
+
+                false
+            }
             _ => false,
         }
     }
@@ -280,7 +384,20 @@ impl CraneliftAOTBackend {
                     '-' => builder.ins().isub(l, r),
                     '*' => builder.ins().imul(l, r),
                     '/' => builder.ins().sdiv(l, r),
-                    _ => unreachable!(),
+
+                    '<' => {
+                        let res = builder.ins().icmp(IntCC::SignedLessThan, l, r);
+                        builder.ins().uextend(types::I32, res)
+                    }
+                    '>' => {
+                        let res = builder.ins().icmp(IntCC::SignedGreaterThan, l, r);
+                        builder.ins().uextend(types::I32, res)
+                    }
+                    '=' => {
+                        let res = builder.ins().icmp(IntCC::Equal, l, r);
+                        builder.ins().uextend(types::I32, res)
+                    }
+                    _ => panic!("Unsupported binary operator: {}", op),
                 }
             }
             Expr::StringLiteral(s) => {
