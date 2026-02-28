@@ -9,6 +9,12 @@ pub enum CelesteType {
 }
 
 #[derive(Debug)]
+pub struct Param {
+    pub name: String,
+    pub ty: CelesteType,
+}
+
+#[derive(Debug)]
 pub struct Program {
     pub stmts: Vec<Stmt>,
 }
@@ -37,6 +43,7 @@ pub enum Stmt {
     },
     Function {
         name: String,
+        params: Vec<Param>,
         return_type: String,
         body: Vec<Stmt>,
         locals: HashMap<String, Local>,

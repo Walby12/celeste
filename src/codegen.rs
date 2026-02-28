@@ -44,53 +44,77 @@ impl CraneliftAOTBackend {
     }
 
     pub fn compile_program(&mut self, program: &Program) {
+        let ptr_type = self.module.target_config().pointer_type();
+        let default_conv = self.module.target_config().default_call_conv;
+
         for stmt in &program.stmts {
-            if let Stmt::Extern {
-                name,
-                arg_types,
-                return_type,
-            } = stmt
-            {
-                let mut sig = self.module.make_signature();
-                sig.call_conv = self.module.target_config().default_call_conv;
-                let ptr_type = self.module.target_config().pointer_type();
+            match stmt {
+                Stmt::Extern {
+                    name,
+                    arg_types,
+                    return_type,
+                } => {
+                    let mut sig = self.module.make_signature();
+                    sig.call_conv = default_conv;
 
-                for arg in arg_types {
-                    let ty = match arg {
-                        CelesteType::Int => types::I32,
-                        CelesteType::String => ptr_type,
-                        _ => {
-                            eprintln!("error: unsupported or invalid type {:?} in extern", arg);
-                            exit(1);
-                        }
-                    };
-                    sig.params.push(AbiParam::new(ty));
+                    for arg in arg_types {
+                        sig.params.push(AbiParam::new(match arg {
+                            CelesteType::Int => types::I32,
+                            CelesteType::String => ptr_type,
+                            _ => types::I32,
+                        }));
+                    }
+
+                    if *return_type == CelesteType::Int {
+                        sig.returns.push(AbiParam::new(types::I32));
+                    }
+
+                    self.module
+                        .declare_function(name, Linkage::Import, &sig)
+                        .unwrap();
                 }
 
-                if *return_type == CelesteType::Int {
-                    sig.returns.push(AbiParam::new(types::I32));
-                } else if *return_type == CelesteType::String {
-                    sig.returns.push(AbiParam::new(ptr_type));
-                }
+                Stmt::Function {
+                    name,
+                    params,
+                    return_type,
+                    ..
+                } => {
+                    let mut sig = self.module.make_signature();
+                    sig.call_conv = default_conv;
 
-                self.module
-                    .declare_function(name, Linkage::Import, &sig)
-                    .expect("Failed to declare extern function");
+                    for param in params {
+                        sig.params.push(AbiParam::new(match param.ty {
+                            CelesteType::Int => types::I32,
+                            CelesteType::String => ptr_type,
+                            _ => types::I32,
+                        }));
+                    }
+
+                    if return_type == "int" {
+                        sig.returns.push(AbiParam::new(types::I32));
+                    } else if return_type == "string" {
+                        sig.returns.push(AbiParam::new(ptr_type));
+                    }
+
+                    self.module
+                        .declare_function(name, Linkage::Export, &sig)
+                        .unwrap();
+                }
+                _ => {}
             }
         }
 
         for stmt in &program.stmts {
-            match stmt {
-                Stmt::Function {
-                    name,
-                    body,
-                    locals,
-                    return_type,
-                } => {
-                    self.compile_function(name, body, locals, return_type);
-                }
-                Stmt::Extern { .. } => {}
-                _ => {}
+            if let Stmt::Function {
+                name,
+                params,
+                body,
+                locals,
+                return_type,
+            } = stmt
+            {
+                self.compile_function(name, params, body, locals, return_type);
             }
         }
     }
@@ -98,15 +122,26 @@ impl CraneliftAOTBackend {
     fn compile_function(
         &mut self,
         name: &str,
+        params: &[Param],
         body: &[Stmt],
         locals: &HashMap<String, Local>,
         return_type: &String,
     ) {
         self.ctx.func.clear();
         self.ctx.func.signature.params.clear();
+        self.ctx.func.signature.call_conv = self.module.target_config().default_call_conv;
         self.ctx.func.signature.returns.clear();
 
         let ptr_type = self.module.target_config().pointer_type();
+
+        for param in params {
+            let ty = match param.ty {
+                CelesteType::Int => types::I32,
+                CelesteType::String => ptr_type,
+                _ => types::I32,
+            };
+            self.ctx.func.signature.params.push(AbiParam::new(ty));
+        }
 
         if return_type == "int" {
             self.ctx
@@ -135,12 +170,12 @@ impl CraneliftAOTBackend {
         builder.seal_block(entry_block);
 
         let mut var_map = HashMap::new();
+
         let mut sorted_locals: Vec<_> = locals.iter().collect();
         sorted_locals.sort_by_key(|(name, _)| *name);
 
         for (i, (var_name, local)) in sorted_locals.into_iter().enumerate() {
             let var_ref = Variable::new(i);
-
             let cranelift_type = match local.ty {
                 CelesteType::Int => types::I32,
                 CelesteType::String => ptr_type,
@@ -149,6 +184,13 @@ impl CraneliftAOTBackend {
 
             builder.declare_var(var_ref, cranelift_type);
             var_map.insert(var_name.clone(), var_ref);
+        }
+
+        for (i, param) in params.iter().enumerate() {
+            if let Some(var_ref) = var_map.get(&param.name) {
+                let val = builder.block_params(entry_block)[i];
+                builder.def_var(*var_ref, val);
+            }
         }
 
         let mut terminated = false;
@@ -168,12 +210,15 @@ impl CraneliftAOTBackend {
                 builder.ins().return_(&[]);
             } else {
                 let zero = builder.ins().iconst(types::I32, 0);
+
                 builder.ins().return_(&[zero]);
             }
         }
 
         builder.finalize();
+
         self.module.define_function(func_id, &mut self.ctx).unwrap();
+
         self.module.clear_context(&mut self.ctx);
     }
 

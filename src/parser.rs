@@ -53,9 +53,44 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     }
 
     lexe(comp);
+    let mut params = Vec::new();
+
+    while !matches!(comp.cur_tok, TokenType::CloseParen) {
+        let p_name = if let TokenType::Ident(ref name) = comp.cur_tok {
+            name.clone()
+        } else {
+            exit(1);
+        };
+        lexe(comp);
+
+        let p_ty = if let TokenType::Ident(ref ty_str) = comp.cur_tok {
+            string_to_celeste_type(ty_str)
+        } else {
+            exit(1);
+        };
+        lexe(comp);
+
+        params.push(Param {
+            name: p_name.clone(),
+            ty: p_ty.clone(),
+        });
+
+        comp.locals.insert(
+            p_name,
+            Local {
+                ty: p_ty,
+                is_mutable: false,
+            },
+        );
+
+        if matches!(comp.cur_tok, TokenType::Comma) {
+            lexe(comp);
+        }
+    }
+
     if !matches!(comp.cur_tok, TokenType::CloseParen) {
         eprintln!(
-            "error, line {}: expected ')' after '(', got {:?}",
+            "error, line {}: expected ')' after function arguments, got {:?}",
             comp.line, comp.cur_tok
         );
         exit(1);
@@ -72,6 +107,7 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
 
     let mut func = Stmt::Function {
         name: fn_name,
+        params,
         return_type: fn_return_type,
         body: Vec::new(),
         locals: comp.locals.clone(),
