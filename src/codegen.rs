@@ -1,10 +1,12 @@
 use cranelift::prelude::*;
+use cranelift_module::FuncOrDataId;
 use cranelift_module::{DataDescription, Linkage, Module};
 use cranelift_native::builder as native_builder;
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
+use std::process::exit;
 
 use crate::ast::*;
 use crate::compiler::*;
@@ -43,6 +45,41 @@ impl CraneliftAOTBackend {
 
     pub fn compile_program(&mut self, program: &Program) {
         for stmt in &program.stmts {
+            if let Stmt::Extern {
+                name,
+                arg_types,
+                return_type,
+            } = stmt
+            {
+                let mut sig = self.module.make_signature();
+                sig.call_conv = self.module.target_config().default_call_conv;
+                let ptr_type = self.module.target_config().pointer_type();
+
+                for arg in arg_types {
+                    let ty = match arg {
+                        CelesteType::Int => types::I32,
+                        CelesteType::String => ptr_type,
+                        _ => {
+                            eprintln!("error: unsupported or invalid type {:?} in extern", arg);
+                            exit(1);
+                        }
+                    };
+                    sig.params.push(AbiParam::new(ty));
+                }
+
+                if *return_type == CelesteType::Int {
+                    sig.returns.push(AbiParam::new(types::I32));
+                } else if *return_type == CelesteType::String {
+                    sig.returns.push(AbiParam::new(ptr_type));
+                }
+
+                self.module
+                    .declare_function(name, Linkage::Import, &sig)
+                    .expect("Failed to declare extern function");
+            }
+        }
+
+        for stmt in &program.stmts {
             match stmt {
                 Stmt::Function {
                     name,
@@ -52,9 +89,8 @@ impl CraneliftAOTBackend {
                 } => {
                     self.compile_function(name, body, locals, return_type);
                 }
-                _ => {
-                    todo!()
-                }
+                Stmt::Extern { .. } => {}
+                _ => {}
             }
         }
     }
@@ -174,6 +210,10 @@ impl CraneliftAOTBackend {
                 }
                 true
             }
+            Stmt::Expression(expr) => {
+                Self::translate_expr(builder, expr, var_map, return_type, module, str_count);
+                false
+            }
             _ => false,
         }
     }
@@ -206,7 +246,7 @@ impl CraneliftAOTBackend {
             Expr::StringLiteral(s) => {
                 let mut data_ctx = DataDescription::new();
                 let mut bytes = s.as_bytes().to_vec();
-                bytes.push(0); // Null terminator
+                bytes.push(0);
                 data_ctx.define(bytes.into_boxed_slice());
 
                 let name = format!("str_{}", *str_count);
@@ -222,6 +262,43 @@ impl CraneliftAOTBackend {
                 let local_id = module.declare_data_in_func(data_id, &mut builder.func);
                 let pointer_type = module.target_config().pointer_type();
                 builder.ins().symbol_value(pointer_type, local_id)
+            }
+            Expr::Call { name, args } => {
+                let func_id = match module.get_name(name) {
+                    Some(FuncOrDataId::Func(id)) => id,
+                    _ => {
+                        eprintln!("error: call to undeclared function '{}'", name);
+                        exit(1);
+                    }
+                };
+
+                let mut arg_values = Vec::new();
+                let mut call_sig = module.make_signature();
+                call_sig.call_conv = module.target_config().default_call_conv;
+
+                for arg in args {
+                    let val =
+                        Self::translate_expr(builder, arg, var_map, return_type, module, str_count);
+                    arg_values.push(val);
+
+                    let ty = builder.func.dfg.value_type(val);
+                    call_sig.params.push(AbiParam::new(ty));
+                }
+
+                call_sig.returns.push(AbiParam::new(types::I32));
+
+                let sig_ref = builder.import_signature(call_sig);
+                let local_func = module.declare_func_in_func(func_id, &mut builder.func);
+
+                builder.func.dfg.ext_funcs[local_func].signature = sig_ref;
+                let call = builder.ins().call(local_func, &arg_values);
+
+                let results = builder.inst_results(call);
+                if results.is_empty() {
+                    builder.ins().iconst(types::I32, 0)
+                } else {
+                    results[0]
+                }
             }
         }
     }

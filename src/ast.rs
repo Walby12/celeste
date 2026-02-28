@@ -23,6 +23,10 @@ pub enum Expr {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
 }
 
 #[derive(Debug)]
@@ -44,4 +48,10 @@ pub enum Stmt {
         name: String,
         value: Box<Expr>,
     },
+    Extern {
+        name: String,
+        arg_types: Vec<CelesteType>,
+        return_type: CelesteType,
+    },
+    Expression(Expr),
 }

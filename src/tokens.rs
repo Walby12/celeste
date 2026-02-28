@@ -5,6 +5,8 @@ pub enum TokenType {
     StringLiteral(String),
     Equals,
     Mut,
+    Extrn,
+    Comma,
     OpenCurly,
     CloseCurly,
     OpenParen,

@@ -72,15 +72,42 @@ pub fn lexe(comp: &mut Compiler) {
             comp.cur_tok = TokenType::Slash;
             return;
         }
+        b',' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::Comma;
+            return;
+        }
         b'"' => {
             comp.index += 1;
-            let start = comp.index;
+            let mut decoded = String::new();
             let mut closed = false;
 
             while comp.index < comp.src.len() {
-                if comp.src[comp.index] == b'"' {
+                let b = comp.src[comp.index];
+
+                if b == b'"' {
                     closed = true;
+                    comp.index += 1;
                     break;
+                }
+
+                if b == b'\\' {
+                    comp.index += 1;
+                    if comp.index < comp.src.len() {
+                        match comp.src[comp.index] {
+                            b'n' => decoded.push('\n'),
+                            b'r' => decoded.push('\r'),
+                            b't' => decoded.push('\t'),
+                            b'\\' => decoded.push('\\'),
+                            b'"' => decoded.push('"'),
+                            _ => {
+                                decoded.push('\\');
+                                decoded.push(comp.src[comp.index] as char);
+                            }
+                        }
+                    }
+                } else {
+                    decoded.push(b as char);
                 }
                 comp.index += 1;
             }
@@ -90,11 +117,7 @@ pub fn lexe(comp: &mut Compiler) {
                 std::process::exit(1);
             }
 
-            let slice = &comp.src[start..comp.index];
-            let s = std::str::from_utf8(slice).unwrap_or("").to_string();
-
-            comp.index += 1;
-            comp.cur_tok = TokenType::StringLiteral(s);
+            comp.cur_tok = TokenType::StringLiteral(decoded);
             return;
         }
         _ => {}
@@ -104,7 +127,7 @@ pub fn lexe(comp: &mut Compiler) {
 
     while comp.index < comp.src.len() {
         let curr = comp.src[comp.index];
-        if curr.is_ascii_whitespace() || b"{}();=+-*/\"".contains(&curr) {
+        if curr.is_ascii_whitespace() || b"{}();=+-*/\",".contains(&curr) {
             break;
         }
         comp.index += 1;
@@ -118,6 +141,7 @@ pub fn lexe(comp: &mut Compiler) {
         "let" => TokenType::Let,
         "return" => TokenType::Return,
         "mut" => TokenType::Mut,
+        "extrn" => TokenType::Extrn,
         _ if value.chars().all(|c| c.is_ascii_digit()) => {
             let n = value.parse::<i32>().unwrap_or(0);
             TokenType::Int(n)

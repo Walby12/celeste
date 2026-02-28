@@ -18,6 +18,7 @@ pub fn parse(comp: &mut Compiler) -> Program {
 fn parse_top_level(comp: &mut Compiler) -> Stmt {
     match comp.cur_tok {
         TokenType::Fn => parse_fn_decl(comp),
+        TokenType::Extrn => parse_extrn_decl(comp),
         _ => {
             eprintln!(
                 "error, line {}: unexpected statement in top level {:?}",
@@ -85,6 +86,88 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     func
 }
 
+fn parse_extrn_decl(comp: &mut Compiler) -> Stmt {
+    lexe(comp);
+
+    if !matches!(comp.cur_tok, TokenType::Fn) {
+        eprintln!("error, line {}: expected 'fn' after 'extern'", comp.line);
+        exit(1);
+    }
+    lexe(comp);
+
+    let fn_name = if let TokenType::Ident(ref name) = comp.cur_tok {
+        name.clone()
+    } else {
+        eprintln!(
+            "error, line {}: expected identifier for extern function",
+            comp.line
+        );
+        exit(1);
+    };
+    lexe(comp);
+
+    if !matches!(comp.cur_tok, TokenType::OpenParen) {
+        eprintln!("error, line {}: expected '('", comp.line);
+        exit(1);
+    }
+    lexe(comp);
+
+    let mut arg_types = Vec::new();
+
+    while !matches!(comp.cur_tok, TokenType::CloseParen) && !matches!(comp.cur_tok, TokenType::Eof)
+    {
+        if let TokenType::Ident(ref ty_str) = comp.cur_tok {
+            arg_types.push(string_to_celeste_type(ty_str));
+            lexe(comp);
+        } else {
+            eprintln!(
+                "error, line {}: expected type name in extern args",
+                comp.line
+            );
+            exit(1);
+        }
+
+        if matches!(comp.cur_tok, TokenType::Comma) {
+            lexe(comp);
+        }
+    }
+
+    if !matches!(comp.cur_tok, TokenType::CloseParen) {
+        eprintln!("error, line {}: expected ')'", comp.line);
+        exit(1);
+    }
+    lexe(comp);
+
+    let return_type = if let TokenType::Ident(ref ty_str) = comp.cur_tok {
+        let t = string_to_celeste_type(ty_str);
+        lexe(comp);
+        t
+    } else {
+        CelesteType::Void
+    };
+
+    if matches!(comp.cur_tok, TokenType::Semicolon) {
+        lexe(comp);
+    } else {
+        eprintln!("error, line {}: expected ';' after extern", comp.line);
+        exit(1);
+    }
+
+    comp.locals.insert(
+        fn_name.clone(),
+        Local {
+            ty: return_type.clone(),
+            is_mutable: false,
+        },
+    );
+
+    Stmt::Extern {
+        name: fn_name,
+        arg_types,
+        return_type,
+    }
+}
+
 fn parse_block(comp: &mut Compiler, func: &mut Stmt) {
     if matches!(comp.cur_tok, TokenType::OpenCurly) {
         lexe(comp);
@@ -112,10 +195,47 @@ fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
     match comp.cur_tok {
         TokenType::Let => parse_let_stmt(comp),
         TokenType::Return => parse_return_stmt(comp, func),
-        TokenType::Ident(_) => parse_assign_stmt(comp),
+        TokenType::Ident(_) => {
+            let (expr, expr_type) = parse_expr(comp);
+
+            if matches!(comp.cur_tok, TokenType::Equals) {
+                if let Expr::Variable(name) = expr {
+                    lexe(comp);
+
+                    let (value_expr, value_type) = parse_expr(comp);
+
+                    let local = comp.locals.get(&name).cloned().unwrap_or_else(|| {
+                        eprintln!("error: undefined variable '{}'", name);
+                        exit(1);
+                    });
+
+                    if !local.is_mutable {
+                        eprintln!("error: variable '{}' is not mutable", name);
+                        exit(1);
+                    }
+
+                    if matches!(comp.cur_tok, TokenType::Semicolon) {
+                        lexe(comp);
+                    }
+
+                    Stmt::Assign {
+                        name,
+                        value: Box::new(value_expr),
+                    }
+                } else {
+                    eprintln!("error: left-hand side of assignment must be a variable");
+                    exit(1);
+                }
+            } else {
+                if matches!(comp.cur_tok, TokenType::Semicolon) {
+                    lexe(comp);
+                }
+                Stmt::Expression(expr)
+            }
+        }
         _ => {
             eprintln!(
-                "error line {}: unknown statement in function scope {:?}",
+                "error line {}: unknown statement {:?}",
                 comp.line, comp.cur_tok
             );
             exit(1);
@@ -353,12 +473,33 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
             (Expr::StringLiteral(s), CelesteType::String)
         }
         TokenType::Ident(name) => {
-            let local = comp.locals.get(&name).cloned().unwrap_or_else(|| {
-                eprintln!("error, line {}: unknown variable '{}'", comp.line, name);
-                exit(1);
-            });
             lexe(comp);
-            (Expr::Variable(name), local.ty)
+
+            if matches!(comp.cur_tok, TokenType::OpenParen) {
+                lexe(comp);
+                let mut args = Vec::new();
+                while !matches!(comp.cur_tok, TokenType::CloseParen) {
+                    let (arg_expr, _) = parse_expr(comp);
+                    args.push(arg_expr);
+                    if matches!(comp.cur_tok, TokenType::Comma) {
+                        lexe(comp);
+                    }
+                }
+                lexe(comp);
+                let ty = comp
+                    .locals
+                    .get(&name)
+                    .map(|l| l.ty.clone())
+                    .unwrap_or(CelesteType::Int);
+
+                (Expr::Call { name, args }, ty)
+            } else {
+                let local = comp.locals.get(&name).cloned().unwrap_or_else(|| {
+                    eprintln!("error, line {}: undefined variable '{}'", comp.line, name);
+                    exit(1);
+                });
+                (Expr::Variable(name), local.ty)
+            }
         }
         TokenType::OpenParen => {
             lexe(comp);
@@ -384,9 +525,12 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
 }
 
 fn string_to_celeste_type(s: &str) -> CelesteType {
-    match s {
+    match s.trim().to_lowercase().as_str() {
         "int" => CelesteType::Int,
         "string" => CelesteType::String,
-        _ => CelesteType::Void,
+        _ => {
+            println!("DEBUG: Failed to match type string: '{}'", s);
+            CelesteType::Void
+        }
     }
 }
