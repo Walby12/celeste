@@ -4,6 +4,7 @@ pub enum CelesteType {
     String,
     Void,
     Pointer(Box<CelesteType>),
+    Array(Box<CelesteType>),
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +36,12 @@ pub enum Expr {
         op: char,
         right: Box<Expr>,
     },
-    AddressOf(String),
+    ArrayLiteral(Vec<Expr>),
+    Index {
+        array: Box<Expr>,
+        index: Box<Expr>,
+    },
+    AddressOf(Box<Expr>),
     Deref(Box<Expr>),
 }
 
@@ -82,6 +88,11 @@ pub enum Stmt {
     },
     PtrAssign {
         ptr_expr: Box<Expr>,
+        value: Box<Expr>,
+    },
+    IndexAssign {
+        array: Expr,
+        index: Expr,
         value: Box<Expr>,
     },
     Expression(Expr, usize),

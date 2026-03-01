@@ -161,6 +161,7 @@ impl CraneliftAOTBackend {
                     cranelift_var: Some(var),
                     var_type: param.ty.clone(),
                     is_mutable: true,
+                    stack_slot: None,
                 },
             );
         }
@@ -216,21 +217,18 @@ impl CraneliftAOTBackend {
 
                 let slot = builder
                     .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8));
-
                 builder.ins().stack_store(val, slot, 0);
-
-                let ptr_ty = module.target_config().pointer_type();
-                let addr = builder.ins().stack_addr(ptr_ty, slot, 0);
 
                 let var = Variable::from_u32(*var_count);
                 *var_count += 1;
-                builder.declare_var(var, ptr_ty);
-                builder.def_var(var, addr);
+                builder.declare_var(var, types::I64);
+                builder.def_var(var, val);
 
                 comp.add_variable(
                     name.clone(),
                     VariableInfo {
                         cranelift_var: Some(var),
+                        stack_slot: Some(slot),
                         var_type: CelesteType::Int,
                         is_mutable: true,
                     },
@@ -412,6 +410,7 @@ impl CraneliftAOTBackend {
 
                 builder.switch_to_block(body_blk);
                 builder.seal_block(body_blk);
+
                 for s in body {
                     Self::translate_stmt(
                         builder,
@@ -423,6 +422,7 @@ impl CraneliftAOTBackend {
                         return_type,
                     );
                 }
+
                 if let Some(p) = post {
                     Self::translate_stmt(
                         builder,
@@ -436,6 +436,7 @@ impl CraneliftAOTBackend {
                 }
 
                 builder.ins().jump(header, &[]);
+
                 builder.switch_to_block(exit_blk);
                 builder.seal_block(header);
                 builder.seal_block(exit_blk);
@@ -491,6 +492,50 @@ impl CraneliftAOTBackend {
                 builder.ins().store(MemFlags::new(), val_to_store, addr, 0);
                 false
             }
+            Stmt::IndexAssign {
+                array,
+                index,
+                value,
+            } => {
+                let ptr_ty = module.target_config().pointer_type();
+
+                let base_addr = Self::translate_expr(
+                    builder,
+                    module,
+                    var_count,
+                    str_count,
+                    array,
+                    comp,
+                    return_type,
+                );
+                let idx_val = Self::translate_expr(
+                    builder,
+                    module,
+                    var_count,
+                    str_count,
+                    index,
+                    comp,
+                    return_type,
+                );
+                let val_to_store = Self::translate_expr(
+                    builder,
+                    module,
+                    var_count,
+                    str_count,
+                    value,
+                    comp,
+                    return_type,
+                );
+
+                let scale = builder.ins().iconst(ptr_ty, 8);
+                let offset = builder.ins().imul(idx_val, scale);
+                let final_addr = builder.ins().iadd(base_addr, offset);
+
+                builder
+                    .ins()
+                    .store(MemFlags::new(), val_to_store, final_addr, 0);
+                false
+            }
             _ => false,
         }
     }
@@ -508,9 +553,13 @@ impl CraneliftAOTBackend {
             Expr::Integer(n) => builder.ins().iconst(types::I64, *n as i64),
             Expr::Variable(name) => {
                 let info = comp.lookup_variable(name).unwrap();
-                let addr = builder.use_var(info.cranelift_var.unwrap());
-
-                builder.ins().load(types::I64, MemFlags::new(), addr, 0)
+                if let Some(var) = info.cranelift_var {
+                    builder.use_var(var)
+                } else if let Some(slot) = info.stack_slot {
+                    builder.ins().stack_load(types::I64, slot, 0)
+                } else {
+                    panic!("Variable {} has no storage", name);
+                }
             }
             Expr::Binary { op, lhs, rhs } => {
                 let l = Self::translate_expr(builder, module, var_count, str_count, lhs, comp, _rt);
@@ -633,9 +682,37 @@ impl CraneliftAOTBackend {
                     _ => todo!(),
                 }
             }
-            Expr::AddressOf(name) => {
-                let info = comp.lookup_variable(name).unwrap();
-                builder.use_var(info.cranelift_var.unwrap())
+            Expr::AddressOf(inner) => {
+                let ptr_ty = module.target_config().pointer_type();
+
+                match &**inner {
+                    Expr::Variable(name) => {
+                        let var_info = comp.lookup_variable(name).unwrap_or_else(|| {
+                            panic!("Variable {} not found in codegen", name);
+                        });
+
+                        let slot = var_info
+                            .stack_slot
+                            .expect("Cannot take address of a variable with no stack slot");
+                        builder.ins().stack_addr(ptr_ty, slot, 0)
+                    }
+
+                    Expr::Index { array, index } => {
+                        let base_addr = Self::translate_expr(
+                            builder, module, var_count, str_count, array, comp, _rt,
+                        );
+
+                        let idx_val = Self::translate_expr(
+                            builder, module, var_count, str_count, index, comp, _rt,
+                        );
+
+                        let scale = builder.ins().iconst(ptr_ty, 8);
+                        let offset = builder.ins().imul(idx_val, scale);
+                        builder.ins().iadd(base_addr, offset)
+                    }
+
+                    _ => todo!("Cannot take address of this expression type: {:?}", inner),
+                }
             }
             Expr::Deref(inner_expr) => {
                 let ptr_val = Self::translate_expr(
@@ -650,6 +727,53 @@ impl CraneliftAOTBackend {
                 };
 
                 builder.ins().load(cl_ty, MemFlags::new(), ptr_val, 0)
+            }
+            Expr::Index { array, index } => {
+                let ptr_ty = module.target_config().pointer_type();
+
+                let base_addr =
+                    Self::translate_expr(builder, module, var_count, str_count, array, comp, _rt);
+                let idx_val =
+                    Self::translate_expr(builder, module, var_count, str_count, index, comp, _rt);
+
+                let array_ty = comp.get_expr_type(array);
+                let (inner_ty, element_size) = match array_ty {
+                    CelesteType::Array(inner) | CelesteType::Pointer(inner) => (*inner.clone(), 8),
+                    _ => (CelesteType::Int, 8),
+                };
+
+                let scale = builder.ins().iconst(ptr_ty, element_size);
+                let offset = builder.ins().imul(idx_val, scale);
+                let final_addr = builder.ins().iadd(base_addr, offset);
+
+                let cl_ty = comp.celeste_to_cranelift(&inner_ty);
+                builder.ins().load(cl_ty, MemFlags::new(), final_addr, 0)
+            }
+            Expr::ArrayLiteral(elements) => {
+                let ptr_type = module.target_config().pointer_type();
+                let element_size = 8;
+                let total_size = (elements.len() * element_size) as u32;
+
+                let slot = builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    total_size,
+                ));
+
+                for (i, element_expr) in elements.iter().enumerate() {
+                    let val = Self::translate_expr(
+                        builder,
+                        module,
+                        var_count,
+                        str_count,
+                        element_expr,
+                        comp,
+                        _rt,
+                    );
+                    let offset = (i * element_size) as i32;
+                    builder.ins().stack_store(val, slot, offset);
+                }
+
+                builder.ins().stack_addr(ptr_type, slot, 0)
             }
         }
     }

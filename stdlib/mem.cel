@@ -1,0 +1,3 @@
+extrn fn malloc(int) int ptr;
+extrn fn realloc(int ptr, int) int ptr;
+extrn fn free(int ptr) void;

@@ -37,6 +37,16 @@ pub fn lexe(comp: &mut Compiler) {
             comp.cur_tok = TokenType::Modulo;
             return;
         }
+        b'[' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::OpenBracket;
+            return;
+        }
+        b']' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::CloseBracket;
+            return;
+        }
         b'&' => {
             comp.index += 1;
             comp.cur_tok = TokenType::Ampersand;
@@ -211,7 +221,7 @@ pub fn lexe(comp: &mut Compiler) {
 
     while comp.index < comp.src.len() {
         let curr = comp.src[comp.index];
-        if curr.is_ascii_whitespace() || b"{}();=+-*/\",.&<>!%&".contains(&curr) {
+        if curr.is_ascii_whitespace() || b"{}();=+-*/\",.&<>!%&[]".contains(&curr) {
             break;
         }
         comp.index += 1;

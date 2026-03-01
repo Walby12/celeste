@@ -37,6 +37,7 @@ impl<'a> TypeChecker<'a> {
                             var_type: param.ty.clone(),
                             is_mutable: false,
                             cranelift_var: None,
+                            stack_slot: None,
                         },
                     );
                 }
@@ -53,6 +54,7 @@ impl<'a> TypeChecker<'a> {
                         var_type: val_ty,
                         is_mutable: true,
                         cranelift_var: None,
+                        stack_slot: None,
                     },
                 );
             }
@@ -162,13 +164,28 @@ impl<'a> TypeChecker<'a> {
                 CelesteType::Int
             }
             Expr::Call { name, args } => self.check_call(name, args, line),
-            Expr::AddressOf(name) => {
-                let info = self.comp.lookup_variable(name).cloned().unwrap_or_else(|| {
-                    self.report_error(format!("undefined variable '{}'", name), line)
-                });
-                CelesteType::Pointer(Box::new(info.var_type))
-            }
-
+            Expr::AddressOf(inner) => match &**inner {
+                Expr::Variable(var_name) => {
+                    let info = self
+                        .comp
+                        .lookup_variable(var_name)
+                        .cloned()
+                        .unwrap_or_else(|| {
+                            self.report_error(format!("undefined variable '{}'", var_name), line)
+                        });
+                    CelesteType::Pointer(Box::new(info.var_type))
+                }
+                Expr::Index { array, .. } => {
+                    let array_ty = self.check_expr(array, line);
+                    match array_ty {
+                        CelesteType::Array(inner_ty) | CelesteType::Pointer(inner_ty) => {
+                            CelesteType::Pointer(inner_ty)
+                        }
+                        _ => panic!("Cannot take address of non-indexable type"),
+                    }
+                }
+                _ => todo!("Handle other AddressOf types"),
+            },
             Expr::Deref(inner_expr) => {
                 let ty = self.check_expr(inner_expr, line);
 
@@ -176,6 +193,27 @@ impl<'a> TypeChecker<'a> {
                     *inner_ty
                 } else {
                     self.report_error("cannot dereference non-pointer type".to_string(), line)
+                }
+            }
+            Expr::ArrayLiteral(elements) => {
+                let inner_ty = if let Some(first) = elements.first() {
+                    self.check_expr(first, line)
+                } else {
+                    CelesteType::Int
+                };
+                CelesteType::Array(Box::new(inner_ty))
+            }
+            Expr::Index { array, index } => {
+                let array_ty = self.check_expr(array, line);
+                let index_ty = self.check_expr(index, line);
+
+                if index_ty != CelesteType::Int {
+                    panic!("Array index must be an integer");
+                }
+
+                match array_ty {
+                    CelesteType::Array(inner) | CelesteType::Pointer(inner) => *inner,
+                    _ => panic!("Cannot index into non-array type"),
                 }
             }
         }

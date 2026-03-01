@@ -1,3 +1,2 @@
 extrn fn printf(string, ..) int;
-extrn fn get_int() int;
 extrn fn scanf(string, ..) int;

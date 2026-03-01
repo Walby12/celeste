@@ -1,0 +1,17 @@
+extrn fn c_strlen(string) int;
+extrn fn c_strcmp(string, string) int;
+extrn fn c_strcpy(string, string) void;
+extrn fn c_strcat(string, string) void;
+extrn fn c_strequal(string, string) int;
+
+fn str_len(s string) int {
+    return c_strlen(s);
+}
+
+fn str_equals(s1 string, s2 string) int {
+    return c_strequal(s1, s2);
+}
+
+fn str_compare(s1 string, s2 string) int {
+    return c_strcmp(s1, s2);
+}

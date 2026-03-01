@@ -7,6 +7,8 @@ pub enum TokenType {
     Mut,
     Extrn,
     Comma,
+    OpenBracket,
+    CloseBracket,
     For,
     While,
     Include,

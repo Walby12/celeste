@@ -123,6 +123,7 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
                 var_type: p_ty,
                 is_mutable: false,
                 cranelift_var: None,
+                stack_slot: None,
             },
         );
 
@@ -280,45 +281,62 @@ fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
         TokenType::If => parse_if_stmt(comp, func),
         TokenType::For => parse_for_stmt(comp, func),
         TokenType::While => parse_while_stmt(comp, func),
+
         TokenType::Ident(_)
         | TokenType::OpenParen
         | TokenType::Int(_)
         | TokenType::StringLiteral(_)
         | TokenType::Bang
-        | TokenType::Minus => {
+        | TokenType::Minus
+        | TokenType::OpenBracket => {
             let (expr, _) = parse_expr(comp);
+
             if matches!(comp.cur_tok, TokenType::Equals) {
-                if let Expr::Variable(name) = expr {
+                lexe(comp);
+                let (value_expr, _) = parse_expr(comp);
+
+                if matches!(comp.cur_tok, TokenType::Semicolon) {
                     lexe(comp);
-                    let (value_expr, _) = parse_expr(comp);
-                    let info = comp.lookup_variable(&name).cloned().unwrap_or_else(|| {
-                        eprintln!(
-                            "error [file: {}, line: {}]: undefined variable '{}'",
-                            comp.filename, start_line, name
-                        );
-                        exit(1);
-                    });
-                    if !info.is_mutable {
-                        eprintln!(
-                            "error [file: {}, line: {}]: variable '{}' is not mutable",
-                            comp.filename, start_line, name
-                        );
-                        exit(1);
+                }
+
+                match expr {
+                    Expr::Variable(name) => {
+                        let info = comp.lookup_variable(&name).cloned().unwrap_or_else(|| {
+                            eprintln!(
+                                "error [file: {}, line: {}]: undefined variable '{}'",
+                                comp.filename, start_line, name
+                            );
+                            exit(1);
+                        });
+
+                        if !info.is_mutable {
+                            eprintln!(
+                                "error [file: {}, line: {}]: variable '{}' is not mutable",
+                                comp.filename, start_line, name
+                            );
+                            exit(1);
+                        }
+
+                        Stmt::Assign {
+                            name,
+                            value: Box::new(value_expr),
+                            line: start_line,
+                        }
                     }
-                    if matches!(comp.cur_tok, TokenType::Semicolon) {
-                        lexe(comp);
-                    }
-                    Stmt::Assign {
-                        name,
+
+                    Expr::Index { array, index } => Stmt::IndexAssign {
+                        array: *array,
+                        index: *index,
                         value: Box::new(value_expr),
-                        line: start_line,
+                    },
+
+                    _ => {
+                        eprintln!(
+                            "error [file: {}, line: {}]: invalid assignment target",
+                            comp.filename, start_line
+                        );
+                        exit(1);
                     }
-                } else {
-                    eprintln!(
-                        "error [file: {}, line: {}]: invalid assignment target",
-                        comp.filename, start_line
-                    );
-                    exit(1);
                 }
             } else {
                 if matches!(comp.cur_tok, TokenType::Semicolon) {
@@ -565,6 +583,7 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
             var_type: value_type,
             is_mutable,
             cranelift_var: None,
+            stack_slot: None,
         },
     );
     Stmt::Let {
@@ -701,30 +720,11 @@ fn parse_unary(comp: &mut Compiler) -> (Expr, CelesteType) {
         }
         TokenType::Ampersand => {
             lexe(comp);
-            if let TokenType::Ident(ref name) = comp.cur_tok {
-                let info = comp.lookup_variable(name).cloned().unwrap_or_else(|| {
-                    eprintln!("error: undefined variable '{}'", name);
-                    exit(1);
-                });
-
-                if !info.is_mutable {
-                    eprintln!(
-                        "error [file: {}, line: {}]: cannot take mutable address of immutable variable '{}'",
-                        comp.filename, comp.line, name
-                    );
-                    exit(1);
-                }
-
-                let var_name = name.clone();
-                lexe(comp);
-                (
-                    Expr::AddressOf(var_name),
-                    CelesteType::Pointer(Box::new(info.var_type)),
-                )
-            } else {
-                eprintln!("error: '&' must be followed by a variable name");
-                exit(1);
-            }
+            let (right, right_ty) = parse_unary(comp);
+            (
+                Expr::AddressOf(Box::new(right)),
+                CelesteType::Pointer(Box::new(right_ty)),
+            )
         }
         TokenType::Ident(ref id) if id == "ptr" => {
             lexe(comp);
@@ -741,6 +741,25 @@ fn parse_unary(comp: &mut Compiler) -> (Expr, CelesteType) {
 
 fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
     match comp.cur_tok.clone() {
+        TokenType::OpenBracket => {
+            lexe(comp);
+            let mut elements = Vec::new();
+            let mut element_type = CelesteType::Int;
+
+            while !matches!(comp.cur_tok, TokenType::CloseBracket) {
+                let (expr, ty) = parse_expr(comp);
+                elements.push(expr);
+                element_type = ty;
+                if matches!(comp.cur_tok, TokenType::Comma) {
+                    lexe(comp);
+                }
+            }
+            lexe(comp);
+            (
+                Expr::ArrayLiteral(elements),
+                CelesteType::Array(Box::new(element_type)),
+            )
+        }
         TokenType::Int(n) => {
             lexe(comp);
             (Expr::Integer(n), CelesteType::Int)
@@ -751,7 +770,8 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
         }
         TokenType::Ident(name) => {
             lexe(comp);
-            if matches!(comp.cur_tok, TokenType::OpenParen) {
+
+            let mut current_res = if matches!(comp.cur_tok, TokenType::OpenParen) {
                 lexe(comp);
                 let mut args = Vec::new();
                 while !matches!(comp.cur_tok, TokenType::CloseParen) {
@@ -773,7 +793,37 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
                     exit(1);
                 });
                 (Expr::Variable(name), info.var_type)
+            };
+
+            while matches!(comp.cur_tok, TokenType::OpenBracket) {
+                lexe(comp);
+                let (index_expr, _) = parse_expr(comp);
+
+                if !matches!(comp.cur_tok, TokenType::CloseBracket) {
+                    eprintln!(
+                        "error [file: {}, line: {}]: expected ']' after array index",
+                        comp.filename, comp.line
+                    );
+                    exit(1);
+                }
+                lexe(comp);
+
+                let next_ty = match current_res.1 {
+                    CelesteType::Pointer(ref inner) => (**inner).clone(),
+                    CelesteType::Array(ref inner) => (**inner).clone(),
+                    _ => CelesteType::Int,
+                };
+
+                current_res = (
+                    Expr::Index {
+                        array: Box::new(current_res.0),
+                        index: Box::new(index_expr),
+                    },
+                    next_ty,
+                );
             }
+
+            current_res
         }
         TokenType::OpenParen => {
             lexe(comp);

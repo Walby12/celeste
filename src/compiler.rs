@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::tokens::*;
+use cranelift::codegen::ir::StackSlot;
 use cranelift::prelude::Variable;
 use cranelift::prelude::types;
 
@@ -10,6 +11,7 @@ use std::path::Path;
 pub struct VariableInfo {
     pub var_type: CelesteType,
     pub is_mutable: bool,
+    pub stack_slot: Option<StackSlot>,
     pub cranelift_var: Option<Variable>,
 }
 
@@ -111,7 +113,7 @@ impl Compiler {
         match ty {
             CelesteType::Int => types::I64,
             CelesteType::String => types::I64,
-            CelesteType::Pointer(_) => types::I64,
+            CelesteType::Pointer(_) | CelesteType::Array(_) => types::I64,
             CelesteType::Void => types::I8,
         }
     }
@@ -123,8 +125,21 @@ impl Compiler {
                 .map(|v| v.var_type.clone())
                 .unwrap_or(CelesteType::Int),
             Expr::AddressOf(name) => {
-                let inner = self.get_expr_type(&Expr::Variable(name.clone()));
-                CelesteType::Pointer(Box::new(inner))
+                let inner_ty = match &**name {
+                    Expr::Variable(var_name) => self
+                        .lookup_variable(var_name)
+                        .map(|info| info.var_type.clone())
+                        .unwrap_or(CelesteType::Int),
+                    Expr::Index { array, .. } => {
+                        let array_ty = self.get_expr_type(array);
+                        match array_ty {
+                            CelesteType::Array(inner) | CelesteType::Pointer(inner) => *inner,
+                            _ => CelesteType::Int,
+                        }
+                    }
+                    _ => CelesteType::Int,
+                };
+                CelesteType::Pointer(Box::new(inner_ty))
             }
             Expr::Deref(inner) => {
                 if let CelesteType::Pointer(base) = self.get_expr_type(inner) {
