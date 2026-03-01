@@ -1,6 +1,3 @@
-use crate::compiler::*;
-use std::collections::HashMap;
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum CelesteType {
     Int,
@@ -33,27 +30,33 @@ pub enum Expr {
         name: String,
         args: Vec<Expr>,
     },
+    Unary {
+        op: char,
+        right: Box<Expr>,
+    },
 }
 
 #[derive(Debug)]
 pub enum Stmt {
-    Let {
-        name: String,
-        value: Expr,
-    },
     Function {
         name: String,
         params: Vec<Param>,
         return_type: String,
         body: Vec<Stmt>,
-        locals: HashMap<String, Local>,
     },
     Return {
         value: Expr,
+        line: usize,
+    },
+    Let {
+        name: String,
+        value: Box<Expr>,
+        line: usize,
     },
     Assign {
         name: String,
         value: Box<Expr>,
+        line: usize,
     },
     Extern {
         name: String,
@@ -65,6 +68,7 @@ pub enum Stmt {
         then_block: Vec<Stmt>,
         else_ifs: Vec<(Expr, Vec<Stmt>)>,
         else_block: Option<Vec<Stmt>>,
+        line: usize,
     },
     For {
         init: Option<Box<Stmt>>,
@@ -72,5 +76,5 @@ pub enum Stmt {
         post: Option<Box<Stmt>>,
         body: Vec<Stmt>,
     },
-    Expression(Expr),
+    Expression(Expr, usize),
 }

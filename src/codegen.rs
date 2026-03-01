@@ -57,13 +57,13 @@ impl CraneliftAOTBackend {
                     sig.call_conv = default_conv;
                     for arg in arg_types {
                         sig.params.push(AbiParam::new(match arg {
-                            CelesteType::Int => types::I32,
+                            CelesteType::Int => types::I64,
                             CelesteType::String => ptr_type,
-                            _ => types::I32,
+                            _ => types::I64,
                         }));
                     }
                     if *return_type == CelesteType::Int {
-                        sig.returns.push(AbiParam::new(types::I32));
+                        sig.returns.push(AbiParam::new(types::I64));
                     }
                     self.module
                         .declare_function(name, Linkage::Import, &sig)
@@ -79,13 +79,13 @@ impl CraneliftAOTBackend {
                     sig.call_conv = default_conv;
                     for param in params {
                         sig.params.push(AbiParam::new(match param.ty {
-                            CelesteType::Int => types::I32,
+                            CelesteType::Int => types::I64,
                             CelesteType::String => ptr_type,
-                            _ => types::I32,
+                            _ => types::I64,
                         }));
                     }
                     if return_type == "int" {
-                        sig.returns.push(AbiParam::new(types::I32));
+                        sig.returns.push(AbiParam::new(types::I64));
                     }
                     self.module
                         .declare_function(name, Linkage::Export, &sig)
@@ -143,9 +143,9 @@ impl CraneliftAOTBackend {
 
         for (i, param) in params.iter().enumerate() {
             let ty = match param.ty {
-                CelesteType::Int => types::I32,
+                CelesteType::Int => types::I64,
                 CelesteType::String => self.module.target_config().pointer_type(),
-                _ => types::I32,
+                _ => types::I64,
             };
             let var = Variable::from_u32(self.var_count);
             self.var_count += 1;
@@ -155,7 +155,6 @@ impl CraneliftAOTBackend {
             comp.add_variable(
                 param.name.clone(),
                 VariableInfo {
-                    stack_slot: None,
                     cranelift_var: Some(var),
                     var_type: param.ty.clone(),
                     is_mutable: true,
@@ -178,7 +177,7 @@ impl CraneliftAOTBackend {
 
         if !terminated {
             if return_type == "int" {
-                let zero = builder.ins().iconst(types::I32, 0);
+                let zero = builder.ins().iconst(types::I64, 0);
                 builder.ins().return_(&[zero]);
             } else {
                 builder.ins().return_(&[]);
@@ -201,7 +200,7 @@ impl CraneliftAOTBackend {
         return_type: &String,
     ) -> bool {
         match stmt {
-            Stmt::Let { name, value } => {
+            Stmt::Let { name, value, .. } => {
                 let val = Self::translate_expr(
                     builder,
                     module,
@@ -220,7 +219,6 @@ impl CraneliftAOTBackend {
                 comp.add_variable(
                     name.clone(),
                     VariableInfo {
-                        stack_slot: None,
                         cranelift_var: Some(var),
                         var_type: CelesteType::Int,
                         is_mutable: true,
@@ -228,7 +226,7 @@ impl CraneliftAOTBackend {
                 );
                 false
             }
-            Stmt::Assign { name, value } => {
+            Stmt::Assign { name, value, .. } => {
                 let val = Self::translate_expr(
                     builder,
                     module,
@@ -247,6 +245,7 @@ impl CraneliftAOTBackend {
                 then_block,
                 else_ifs,
                 else_block,
+                ..
             } => {
                 let exit_block = builder.create_block();
                 let mut next_conditional_block = builder.create_block();
@@ -432,7 +431,7 @@ impl CraneliftAOTBackend {
                 comp.exit_scope();
                 false
             }
-            Stmt::Return { value } => {
+            Stmt::Return { value, .. } => {
                 let val = Self::translate_expr(
                     builder,
                     module,
@@ -445,7 +444,7 @@ impl CraneliftAOTBackend {
                 builder.ins().return_(&[val]);
                 true
             }
-            Stmt::Expression(expr) => {
+            Stmt::Expression(expr, ..) => {
                 Self::translate_expr(
                     builder,
                     module,
@@ -471,7 +470,7 @@ impl CraneliftAOTBackend {
         _rt: &String,
     ) -> Value {
         match expr {
-            Expr::Integer(n) => builder.ins().iconst(types::I32, *n as i64),
+            Expr::Integer(n) => builder.ins().iconst(types::I64, *n as i64),
             Expr::Variable(name) => {
                 let info = comp.lookup_variable(name).expect("Var not found");
                 builder.use_var(info.cranelift_var.unwrap())
@@ -479,21 +478,37 @@ impl CraneliftAOTBackend {
             Expr::Binary { op, lhs, rhs } => {
                 let l = Self::translate_expr(builder, module, var_count, str_count, lhs, comp, _rt);
                 let r = Self::translate_expr(builder, module, var_count, str_count, rhs, comp, _rt);
+
                 match op {
                     '+' => builder.ins().iadd(l, r),
                     '-' => builder.ins().isub(l, r),
                     '*' => builder.ins().imul(l, r),
+                    '/' => builder.ins().sdiv(l, r),
+                    '%' => builder.ins().srem(l, r),
+
+                    '=' => {
+                        let res = builder.ins().icmp(IntCC::Equal, l, r);
+                        builder.ins().uextend(types::I64, res)
+                    }
+                    'N' => {
+                        let res = builder.ins().icmp(IntCC::NotEqual, l, r);
+                        builder.ins().uextend(types::I64, res)
+                    }
                     '<' => {
                         let res = builder.ins().icmp(IntCC::SignedLessThan, l, r);
-                        builder.ins().uextend(types::I32, res)
+                        builder.ins().uextend(types::I64, res)
                     }
                     '>' => {
                         let res = builder.ins().icmp(IntCC::SignedGreaterThan, l, r);
-                        builder.ins().uextend(types::I32, res)
+                        builder.ins().uextend(types::I64, res)
                     }
-                    '=' => {
-                        let res = builder.ins().icmp(IntCC::Equal, l, r);
-                        builder.ins().uextend(types::I32, res)
+                    'L' => {
+                        let res = builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r);
+                        builder.ins().uextend(types::I64, res)
+                    }
+                    'G' => {
+                        let res = builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, l, r);
+                        builder.ins().uextend(types::I64, res)
                     }
                     _ => {
                         eprintln!("Codegen Error: Operator '{}' not implemented", op);
@@ -554,7 +569,7 @@ impl CraneliftAOTBackend {
                     let inst = builder.ins().call_indirect(sig_ref, callee_ptr, &av);
 
                     if base_sig.returns.is_empty() {
-                        builder.ins().iconst(types::I32, 0)
+                        builder.ins().iconst(types::I64, 0)
                     } else {
                         builder.inst_results(inst)[0]
                     }
@@ -563,13 +578,24 @@ impl CraneliftAOTBackend {
                     let inst = builder.ins().call(lfunc, &av);
 
                     if base_sig.returns.is_empty() {
-                        builder.ins().iconst(types::I32, 0)
+                        builder.ins().iconst(types::I64, 0)
                     } else {
                         builder.inst_results(inst)[0]
                     }
                 }
             }
-            _ => builder.ins().iconst(types::I32, 0),
+            Expr::Unary { op, right } => {
+                let val =
+                    Self::translate_expr(builder, module, var_count, str_count, right, comp, _rt);
+                match op {
+                    '!' => {
+                        let zero = builder.ins().iconst(types::I64, 0);
+                        let res = builder.ins().icmp(IntCC::Equal, val, zero);
+                        builder.ins().uextend(types::I64, res)
+                    }
+                    _ => todo!(),
+                }
+            }
         }
     }
 

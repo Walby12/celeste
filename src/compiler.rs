@@ -6,17 +6,15 @@ use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
-pub struct Local {
-    pub ty: CelesteType,
-    pub is_mutable: bool,
-}
-
-#[derive(Debug, Clone)]
 pub struct VariableInfo {
-    pub stack_slot: Option<cranelift::codegen::ir::StackSlot>,
     pub var_type: CelesteType,
     pub is_mutable: bool,
     pub cranelift_var: Option<Variable>,
+}
+
+pub struct FunctionInfo {
+    pub params: Vec<CelesteType>,
+    pub return_type: CelesteType,
 }
 
 pub struct Compiler {
@@ -25,8 +23,8 @@ pub struct Compiler {
     pub index: usize,
     pub cur_tok: TokenType,
     pub filename: String,
-    pub locals: HashMap<String, Local>,
     pub globals: HashMap<String, CelesteType>,
+    pub functions: HashMap<String, FunctionInfo>,
     pub scopes: Vec<HashMap<String, VariableInfo>>,
 }
 
@@ -38,8 +36,8 @@ impl Compiler {
             index: 0,
             cur_tok: TokenType::Eof,
             filename: path.to_string_lossy().into_owned(),
-            locals: HashMap::new(),
             globals: HashMap::new(),
+            functions: HashMap::new(),
             scopes: Vec::new(),
         }
     }
@@ -65,12 +63,43 @@ impl Compiler {
         }
         None
     }
-    pub fn lookup_variable_mut(&mut self, name: &str) -> Option<&mut VariableInfo> {
-        for scope in self.scopes.iter_mut().rev() {
-            if let Some(info) = scope.get_mut(name) {
-                return Some(info);
+
+    pub fn lookup_function(&self, name: &str) -> Option<&FunctionInfo> {
+        self.functions.get(name)
+    }
+
+    pub fn register_functions(&mut self, program: &Program) {
+        for stmt in &program.stmts {
+            match stmt {
+                Stmt::Function {
+                    name,
+                    params,
+                    return_type,
+                    ..
+                } => {
+                    let info = FunctionInfo {
+                        params: params.iter().map(|p| p.ty.clone()).collect(),
+                        return_type: if return_type == "int" {
+                            CelesteType::Int
+                        } else {
+                            CelesteType::Void
+                        },
+                    };
+                    self.functions.insert(name.clone(), info);
+                }
+                Stmt::Extern {
+                    name,
+                    arg_types,
+                    return_type,
+                } => {
+                    let info = FunctionInfo {
+                        params: arg_types.clone(),
+                        return_type: return_type.clone(),
+                    };
+                    self.functions.insert(name.clone(), info);
+                }
+                _ => {}
             }
         }
-        None
     }
 }

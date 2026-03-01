@@ -32,14 +32,39 @@ pub fn lexe(comp: &mut Compiler) {
             }
             return;
         }
+        b'%' => {
+            comp.index += 1;
+            comp.cur_tok = TokenType::Modulo;
+            return;
+        }
+        b'!' => {
+            comp.index += 1;
+            if comp.index < comp.src.len() && comp.src[comp.index] == b'=' {
+                comp.index += 1;
+                comp.cur_tok = TokenType::NotEquals;
+            } else {
+                comp.cur_tok = TokenType::Bang;
+            }
+            return;
+        }
         b'<' => {
             comp.index += 1;
-            comp.cur_tok = TokenType::Less;
+            if comp.index < comp.src.len() && comp.src[comp.index] == b'=' {
+                comp.index += 1;
+                comp.cur_tok = TokenType::LessEquals;
+            } else {
+                comp.cur_tok = TokenType::Less;
+            }
             return;
         }
         b'>' => {
             comp.index += 1;
-            comp.cur_tok = TokenType::Greater;
+            if comp.index < comp.src.len() && comp.src[comp.index] == b'=' {
+                comp.index += 1;
+                comp.cur_tok = TokenType::GreaterEquals;
+            } else {
+                comp.cur_tok = TokenType::Greater;
+            }
             return;
         }
         b'{' => {
@@ -181,7 +206,7 @@ pub fn lexe(comp: &mut Compiler) {
 
     while comp.index < comp.src.len() {
         let curr = comp.src[comp.index];
-        if curr.is_ascii_whitespace() || b"{}();=+-*/\",.&<>".contains(&curr) {
+        if curr.is_ascii_whitespace() || b"{}();=+-*/\",.&<>!%".contains(&curr) {
             break;
         }
         comp.index += 1;

@@ -26,7 +26,10 @@ fn parse_include(comp: &mut Compiler) -> Vec<Stmt> {
     let include_path_str = if let TokenType::StringLiteral(ref s) = comp.cur_tok {
         s.clone()
     } else {
-        eprintln!("error line {}: expected string after include", comp.line);
+        eprintln!(
+            "error [file: {}, line: {}]: expected string after include",
+            comp.filename, comp.line
+        );
         exit(1);
     };
     lexe(comp);
@@ -43,7 +46,10 @@ fn parse_include(comp: &mut Compiler) -> Vec<Stmt> {
         if stdlib_path.exists() {
             full_path = stdlib_path;
         } else {
-            eprintln!("error: could not find file '{}'", include_path_str);
+            eprintln!(
+                "error [file: {}, line: {}]: could not find file '{}'",
+                comp.filename, comp.line, include_path_str
+            );
             exit(1);
         }
     }
@@ -65,8 +71,8 @@ fn parse_top_level(comp: &mut Compiler) -> Stmt {
         TokenType::Extrn => parse_extrn_decl(comp),
         _ => {
             eprintln!(
-                "error line {}: unexpected top level token {:?}",
-                comp.line, comp.cur_tok
+                "error [file: {}, line: {}]: unexpected top level token {:?}",
+                comp.filename, comp.line, comp.cur_tok
             );
             exit(1);
         }
@@ -79,13 +85,19 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     let fn_name = if let TokenType::Ident(ref name) = comp.cur_tok {
         name.clone()
     } else {
-        eprintln!("error line {}: expected function name", comp.line);
+        eprintln!(
+            "error [file: {}, line: {}]: expected function name",
+            comp.filename, comp.line
+        );
         exit(1);
     };
     lexe(comp);
 
     if !matches!(comp.cur_tok, TokenType::OpenParen) {
-        eprintln!("error line {}: expected '('", comp.line);
+        eprintln!(
+            "error [file: {}, line: {}]: expected '('",
+            comp.filename, comp.line
+        );
         exit(1);
     }
     lexe(comp);
@@ -115,7 +127,6 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
             VariableInfo {
                 var_type: p_ty,
                 is_mutable: false,
-                stack_slot: None,
                 cranelift_var: None,
             },
         );
@@ -138,23 +149,22 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     comp.globals.insert(fn_name.clone(), return_type.clone());
 
     let body = parse_block_internal(comp, &fn_name, &fn_return_type_str);
-    if fn_return_type_str != "void" {
-        let has_return = body.iter().any(|stmt| matches!(stmt, Stmt::Return { .. }));
 
+    if fn_return_type_str != "void" {
         if let Some(last_stmt) = body.last() {
             if !matches!(last_stmt, Stmt::Return { .. }) {
                 eprintln!(
-                    "error line {}: function '{}' must end with a return statement",
-                    comp.line, fn_name
+                    "error [file: {}, line: {}]: function '{}' must end with a return statement",
+                    comp.filename, comp.line, fn_name
                 );
-                std::process::exit(1);
+                exit(1);
             }
         } else {
             eprintln!(
-                "error line {}: function '{}' is empty but expects a return",
-                comp.line, fn_name
+                "error [file: {}, line: {}]: function '{}' is empty but expects a return",
+                comp.filename, comp.line, fn_name
             );
-            std::process::exit(1);
+            exit(1);
         }
     }
     comp.exit_scope();
@@ -164,13 +174,15 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
         params,
         return_type: fn_return_type_str,
         body,
-        locals: std::collections::HashMap::new(),
     }
 }
 
 fn parse_block_internal(comp: &mut Compiler, fn_name: &str, ret_ty: &str) -> Vec<Stmt> {
     if !matches!(comp.cur_tok, TokenType::OpenCurly) {
-        eprintln!("error line {}: expected '{{'", comp.line);
+        eprintln!(
+            "error [file: {}, line: {}]: expected '{{'",
+            comp.filename, comp.line
+        );
         exit(1);
     }
     lexe(comp);
@@ -181,7 +193,6 @@ fn parse_block_internal(comp: &mut Compiler, fn_name: &str, ret_ty: &str) -> Vec
         params: vec![],
         return_type: ret_ty.to_string(),
         body: vec![],
-        locals: std::collections::HashMap::new(),
     };
 
     while comp.cur_tok != TokenType::CloseCurly && comp.cur_tok != TokenType::Eof {
@@ -189,7 +200,10 @@ fn parse_block_internal(comp: &mut Compiler, fn_name: &str, ret_ty: &str) -> Vec
     }
 
     if !matches!(comp.cur_tok, TokenType::CloseCurly) {
-        eprintln!("error line {}: expected '}}'", comp.line);
+        eprintln!(
+            "error [file: {}, line: {}]: expected '}}'",
+            comp.filename, comp.line
+        );
         exit(1);
     }
     lexe(comp);
@@ -249,26 +263,35 @@ fn parse_extrn_decl(comp: &mut Compiler) -> Stmt {
 }
 
 fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
+    let start_line = comp.line;
     match comp.cur_tok {
         TokenType::Let => parse_let_stmt(comp),
         TokenType::Return => parse_return_stmt(comp, func),
         TokenType::If => parse_if_stmt(comp, func),
         TokenType::For => parse_for_stmt(comp, func),
         TokenType::While => parse_while_stmt(comp, func),
-        TokenType::Ident(_) => {
+        TokenType::Ident(_)
+        | TokenType::OpenParen
+        | TokenType::Int(_)
+        | TokenType::StringLiteral(_)
+        | TokenType::Bang
+        | TokenType::Minus => {
             let (expr, _) = parse_expr(comp);
             if matches!(comp.cur_tok, TokenType::Equals) {
                 if let Expr::Variable(name) = expr {
                     lexe(comp);
                     let (value_expr, _) = parse_expr(comp);
                     let info = comp.lookup_variable(&name).cloned().unwrap_or_else(|| {
-                        eprintln!("error line {}: undefined variable '{}'", comp.line, name);
+                        eprintln!(
+                            "error [file: {}, line: {}]: undefined variable '{}'",
+                            comp.filename, start_line, name
+                        );
                         exit(1);
                     });
                     if !info.is_mutable {
                         eprintln!(
-                            "error line {}: variable '{}' is not mutable",
-                            comp.line, name
+                            "error [file: {}, line: {}]: variable '{}' is not mutable",
+                            comp.filename, start_line, name
                         );
                         exit(1);
                     }
@@ -278,22 +301,26 @@ fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
                     Stmt::Assign {
                         name,
                         value: Box::new(value_expr),
+                        line: start_line,
                     }
                 } else {
-                    eprintln!("error line {}: invalid assignment target", comp.line);
+                    eprintln!(
+                        "error [file: {}, line: {}]: invalid assignment target",
+                        comp.filename, start_line
+                    );
                     exit(1);
                 }
             } else {
                 if matches!(comp.cur_tok, TokenType::Semicolon) {
                     lexe(comp);
                 }
-                Stmt::Expression(expr)
+                Stmt::Expression(expr, start_line)
             }
         }
         _ => {
             eprintln!(
-                "error line {}: unknown statement token {:?}",
-                comp.line, comp.cur_tok
+                "error [file: {}, line: {}]: unknown statement token {:?}",
+                comp.filename, start_line, comp.cur_tok
             );
             exit(1);
         }
@@ -315,10 +342,10 @@ fn parse_while_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
             lexe(comp);
         } else {
             eprintln!(
-                "error line {}: expected ')' after while condition",
-                comp.line
+                "error [file: {}, line: {}]: expected ')' after while condition",
+                comp.filename, comp.line
             );
-            std::process::exit(1);
+            exit(1);
         }
     }
 
@@ -348,8 +375,29 @@ fn parse_for_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
         if matches!(comp.cur_tok, TokenType::Let) {
             init = Some(Box::new(parse_let_stmt(comp)));
         } else {
+            let start_line = comp.line;
             let (e, _) = parse_expr(comp);
-            init = Some(Box::new(Stmt::Expression(e)));
+
+            if matches!(comp.cur_tok, TokenType::Equals) {
+                if let Expr::Variable(name) = e {
+                    lexe(comp);
+                    let (val, _) = parse_expr(comp);
+                    init = Some(Box::new(Stmt::Assign {
+                        name,
+                        value: Box::new(val),
+                        line: start_line,
+                    }));
+                } else {
+                    eprintln!(
+                        "error [file: {}, line: {}]: invalid assignment target in for loop",
+                        comp.filename, start_line
+                    );
+                    exit(1);
+                }
+            } else {
+                init = Some(Box::new(Stmt::Expression(e, start_line)));
+            }
+
             if matches!(comp.cur_tok, TokenType::Semicolon) {
                 lexe(comp);
             }
@@ -369,6 +417,7 @@ fn parse_for_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
     if !matches!(comp.cur_tok, TokenType::CloseParen)
         && !matches!(comp.cur_tok, TokenType::OpenCurly)
     {
+        let start_line = comp.line;
         let (expr, _) = parse_expr(comp);
 
         if matches!(comp.cur_tok, TokenType::Equals) {
@@ -378,10 +427,11 @@ fn parse_for_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
                 post = Some(Box::new(Stmt::Assign {
                     name,
                     value: Box::new(val),
+                    line: start_line,
                 }));
             }
         } else {
-            post = Some(Box::new(Stmt::Expression(expr)));
+            post = Some(Box::new(Stmt::Expression(expr, start_line)));
         }
     }
 
@@ -400,6 +450,7 @@ fn parse_for_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
 }
 
 fn parse_if_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
+    let start_line = comp.line;
     lexe(comp);
     if !matches!(comp.cur_tok, TokenType::OpenParen) {
         exit(1);
@@ -419,8 +470,14 @@ fn parse_if_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
         lexe(comp);
         if matches!(comp.cur_tok, TokenType::If) {
             lexe(comp);
+            if !matches!(comp.cur_tok, TokenType::OpenParen) {
+                exit(1);
+            }
             lexe(comp);
             let (ei_cond, _) = parse_expr(comp);
+            if !matches!(comp.cur_tok, TokenType::CloseParen) {
+                exit(1);
+            }
             lexe(comp);
             let ei_body = parse_block_as_vec(comp, func);
             else_ifs.push((ei_cond, ei_body));
@@ -434,12 +491,16 @@ fn parse_if_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
         then_block,
         else_ifs,
         else_block,
+        line: start_line,
     }
 }
 
 fn parse_block_as_vec(comp: &mut Compiler, func: &Stmt) -> Vec<Stmt> {
     if !matches!(comp.cur_tok, TokenType::OpenCurly) {
-        eprintln!("error line {}: expected '{{'", comp.line);
+        eprintln!(
+            "error [file: {}, line: {}]: expected '{{'",
+            comp.filename, comp.line
+        );
         exit(1);
     }
     lexe(comp);
@@ -449,7 +510,10 @@ fn parse_block_as_vec(comp: &mut Compiler, func: &Stmt) -> Vec<Stmt> {
         body.push(parse_stmt(comp, func));
     }
     if !matches!(comp.cur_tok, TokenType::CloseCurly) {
-        eprintln!("error line {}: expected '}}'", comp.line);
+        eprintln!(
+            "error [file: {}, line: {}]: expected '}}'",
+            comp.filename, comp.line
+        );
         exit(1);
     }
     lexe(comp);
@@ -458,7 +522,9 @@ fn parse_block_as_vec(comp: &mut Compiler, func: &Stmt) -> Vec<Stmt> {
 }
 
 fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
+    let start_line = comp.line;
     lexe(comp);
+
     let mut is_mutable = false;
     if matches!(comp.cur_tok, TokenType::Mut) {
         is_mutable = true;
@@ -471,7 +537,10 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
     };
     lexe(comp);
     if !matches!(comp.cur_tok, TokenType::Equals) {
-        eprintln!("error line {}: expected '='", comp.line);
+        eprintln!(
+            "error [file: {}, line: {}]: expected '='",
+            comp.filename, start_line
+        );
         exit(1);
     }
     lexe(comp);
@@ -485,29 +554,35 @@ fn parse_let_stmt(comp: &mut Compiler) -> Stmt {
         VariableInfo {
             var_type: value_type,
             is_mutable,
-            stack_slot: None,
             cranelift_var: None,
         },
     );
     Stmt::Let {
         name: var_name,
-        value: value_expr,
+        value: Box::new(value_expr),
+        line: start_line,
     }
 }
 
 fn parse_return_stmt(comp: &mut Compiler, _func: &Stmt) -> Stmt {
+    let start_line = comp.line;
     lexe(comp);
+
     if matches!(comp.cur_tok, TokenType::Semicolon) {
         lexe(comp);
         return Stmt::Return {
             value: Expr::Integer(0),
+            line: start_line,
         };
     }
     let (val_expr, _) = parse_expr(comp);
     if matches!(comp.cur_tok, TokenType::Semicolon) {
         lexe(comp);
     }
-    Stmt::Return { value: val_expr }
+    Stmt::Return {
+        value: val_expr,
+        line: start_line,
+    }
 }
 
 fn parse_expr(comp: &mut Compiler) -> (Expr, CelesteType) {
@@ -518,12 +593,20 @@ fn parse_comparison(comp: &mut Compiler) -> (Expr, CelesteType) {
     let (mut lhs, mut lhs_ty) = parse_additive(comp);
     while matches!(
         comp.cur_tok,
-        TokenType::Less | TokenType::Greater | TokenType::DoubleEquals
+        TokenType::Less
+            | TokenType::Greater
+            | TokenType::DoubleEquals
+            | TokenType::LessEquals
+            | TokenType::GreaterEquals
+            | TokenType::NotEquals
     ) {
         let op = match comp.cur_tok {
             TokenType::Less => '<',
             TokenType::Greater => '>',
             TokenType::DoubleEquals => '=',
+            TokenType::LessEquals => 'L',
+            TokenType::GreaterEquals => 'G',
+            TokenType::NotEquals => 'N',
             _ => break,
         };
         lexe(comp);
@@ -559,15 +642,19 @@ fn parse_additive(comp: &mut Compiler) -> (Expr, CelesteType) {
 }
 
 fn parse_multiplicative(comp: &mut Compiler) -> (Expr, CelesteType) {
-    let (mut lhs, mut lhs_ty) = parse_primary(comp);
-    while matches!(comp.cur_tok, TokenType::Star | TokenType::Slash) {
-        let op = if matches!(comp.cur_tok, TokenType::Star) {
-            '*'
-        } else {
-            '/'
+    let (mut lhs, mut lhs_ty) = parse_unary(comp);
+    while matches!(
+        comp.cur_tok,
+        TokenType::Star | TokenType::Slash | TokenType::Modulo
+    ) {
+        let op = match comp.cur_tok {
+            TokenType::Star => '*',
+            TokenType::Slash => '/',
+            TokenType::Modulo => '%',
+            _ => unreachable!(),
         };
         lexe(comp);
-        let (rhs, _) = parse_primary(comp);
+        let (rhs, _) = parse_unary(comp);
         lhs = Expr::Binary {
             op,
             lhs: Box::new(lhs),
@@ -576,6 +663,35 @@ fn parse_multiplicative(comp: &mut Compiler) -> (Expr, CelesteType) {
         lhs_ty = CelesteType::Int;
     }
     (lhs, lhs_ty)
+}
+
+fn parse_unary(comp: &mut Compiler) -> (Expr, CelesteType) {
+    match comp.cur_tok {
+        TokenType::Bang => {
+            lexe(comp);
+            let (right, _) = parse_unary(comp);
+
+            (
+                Expr::Unary {
+                    op: '!',
+                    right: Box::new(right),
+                },
+                CelesteType::Int,
+            )
+        }
+        TokenType::Minus => {
+            lexe(comp);
+            let (right, _) = parse_unary(comp);
+            (
+                Expr::Unary {
+                    op: '-',
+                    right: Box::new(right),
+                },
+                CelesteType::Int,
+            )
+        }
+        _ => parse_primary(comp),
+    }
 }
 
 fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
@@ -605,7 +721,10 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
                 (Expr::Call { name, args }, ret_ty)
             } else {
                 let info = comp.lookup_variable(&name).cloned().unwrap_or_else(|| {
-                    eprintln!("error line {}: undefined variable '{}'", comp.line, name);
+                    eprintln!(
+                        "error [file: {}, line: {}]: undefined variable '{}'",
+                        comp.filename, comp.line, name
+                    );
                     exit(1);
                 });
                 (Expr::Variable(name), info.var_type)
@@ -615,7 +734,10 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
             lexe(comp);
             let res = parse_expr(comp);
             if !matches!(comp.cur_tok, TokenType::CloseParen) {
-                eprintln!("error line {}: expected ')'", comp.line);
+                eprintln!(
+                    "error [file: {}, line: {}]: expected ')'",
+                    comp.filename, comp.line
+                );
                 exit(1);
             }
             lexe(comp);
@@ -623,8 +745,8 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
         }
         _ => {
             eprintln!(
-                "error line {}: expected expression, got {:?}",
-                comp.line, comp.cur_tok
+                "error [file: {}, line: {}]: expected expression, got {:?}",
+                comp.filename, comp.line, comp.cur_tok
             );
             exit(1);
         }

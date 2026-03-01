@@ -4,6 +4,7 @@ mod compiler;
 mod lexer;
 mod parser;
 mod tokens;
+mod typechecker;
 
 use clap::Parser;
 use std::fs::read_to_string;
@@ -56,6 +57,9 @@ fn main() {
 
     let mut comp = Compiler::new(src, input_path);
     let program = parser::parse(&mut comp);
+    comp.register_functions(&program);
+    let mut checker = typechecker::TypeChecker::new(&mut comp);
+    checker.check_program(&program);
 
     if args.dump_ast {
         let mut ast_content = String::new();
