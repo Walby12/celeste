@@ -20,6 +20,7 @@ pub enum TokenType {
     NotEquals,
     Bang,
     Modulo,
+    Ampersand,
     DoubleEquals,
     OpenCurly,
     CloseCurly,

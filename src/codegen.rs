@@ -19,7 +19,8 @@ pub struct CraneliftAOTBackend {
 impl CraneliftAOTBackend {
     pub fn new() -> Self {
         let target_isa_builder = native_builder().expect("Host machine is not supported");
-        let flag_builder = settings::builder();
+        let mut flag_builder = settings::builder();
+        flag_builder.set("opt_level", "speed").unwrap();
         let isa = target_isa_builder
             .finish(settings::Flags::new(flag_builder))
             .expect("Failed to create ISA");
@@ -52,6 +53,7 @@ impl CraneliftAOTBackend {
                     name,
                     arg_types,
                     return_type,
+                    ..
                 } => {
                     let mut sig = self.module.make_signature();
                     sig.call_conv = default_conv;
@@ -59,6 +61,7 @@ impl CraneliftAOTBackend {
                         sig.params.push(AbiParam::new(match arg {
                             CelesteType::Int => types::I64,
                             CelesteType::String => ptr_type,
+                            CelesteType::Pointer(_) => ptr_type,
                             _ => types::I64,
                         }));
                     }
@@ -210,12 +213,20 @@ impl CraneliftAOTBackend {
                     comp,
                     return_type,
                 );
-                let ty = builder.func.dfg.value_type(val);
+
+                let slot = builder
+                    .create_sized_stack_slot(StackSlotData::new(StackSlotKind::ExplicitSlot, 8));
+
+                builder.ins().stack_store(val, slot, 0);
+
+                let ptr_ty = module.target_config().pointer_type();
+                let addr = builder.ins().stack_addr(ptr_ty, slot, 0);
+
                 let var = Variable::from_u32(*var_count);
                 *var_count += 1;
+                builder.declare_var(var, ptr_ty);
+                builder.def_var(var, addr);
 
-                builder.declare_var(var, ty);
-                builder.def_var(var, val);
                 comp.add_variable(
                     name.clone(),
                     VariableInfo {
@@ -456,6 +467,30 @@ impl CraneliftAOTBackend {
                 );
                 false
             }
+            Stmt::PtrAssign { ptr_expr, value } => {
+                let addr = Self::translate_expr(
+                    builder,
+                    module,
+                    var_count,
+                    str_count,
+                    ptr_expr,
+                    comp,
+                    return_type,
+                );
+
+                let val_to_store = Self::translate_expr(
+                    builder,
+                    module,
+                    var_count,
+                    str_count,
+                    value,
+                    comp,
+                    return_type,
+                );
+
+                builder.ins().store(MemFlags::new(), val_to_store, addr, 0);
+                false
+            }
             _ => false,
         }
     }
@@ -472,8 +507,10 @@ impl CraneliftAOTBackend {
         match expr {
             Expr::Integer(n) => builder.ins().iconst(types::I64, *n as i64),
             Expr::Variable(name) => {
-                let info = comp.lookup_variable(name).expect("Var not found");
-                builder.use_var(info.cranelift_var.unwrap())
+                let info = comp.lookup_variable(name).unwrap();
+                let addr = builder.use_var(info.cranelift_var.unwrap());
+
+                builder.ins().load(types::I64, MemFlags::new(), addr, 0)
             }
             Expr::Binary { op, lhs, rhs } => {
                 let l = Self::translate_expr(builder, module, var_count, str_count, lhs, comp, _rt);
@@ -595,6 +632,24 @@ impl CraneliftAOTBackend {
                     }
                     _ => todo!(),
                 }
+            }
+            Expr::AddressOf(name) => {
+                let info = comp.lookup_variable(name).unwrap();
+                builder.use_var(info.cranelift_var.unwrap())
+            }
+            Expr::Deref(inner_expr) => {
+                let ptr_val = Self::translate_expr(
+                    builder, module, var_count, str_count, inner_expr, comp, _rt,
+                );
+
+                let inner_ty = comp.get_expr_type(inner_expr);
+
+                let cl_ty = match inner_ty {
+                    CelesteType::Pointer(base_ty) => comp.celeste_to_cranelift(&base_ty),
+                    _ => types::I64,
+                };
+
+                builder.ins().load(cl_ty, MemFlags::new(), ptr_val, 0)
             }
         }
     }

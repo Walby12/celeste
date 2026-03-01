@@ -1,6 +1,7 @@
 use crate::ast::*;
 use crate::tokens::*;
 use cranelift::prelude::Variable;
+use cranelift::prelude::types;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -15,6 +16,7 @@ pub struct VariableInfo {
 pub struct FunctionInfo {
     pub params: Vec<CelesteType>,
     pub return_type: CelesteType,
+    pub is_variadic: bool,
 }
 
 pub struct Compiler {
@@ -84,6 +86,7 @@ impl Compiler {
                         } else {
                             CelesteType::Void
                         },
+                        is_variadic: false,
                     };
                     self.functions.insert(name.clone(), info);
                 }
@@ -91,15 +94,47 @@ impl Compiler {
                     name,
                     arg_types,
                     return_type,
+                    is_variadic,
                 } => {
                     let info = FunctionInfo {
                         params: arg_types.clone(),
                         return_type: return_type.clone(),
+                        is_variadic: *is_variadic,
                     };
                     self.functions.insert(name.clone(), info);
                 }
                 _ => {}
             }
+        }
+    }
+    pub fn celeste_to_cranelift(&self, ty: &CelesteType) -> types::Type {
+        match ty {
+            CelesteType::Int => types::I64,
+            CelesteType::String => types::I64,
+            CelesteType::Pointer(_) => types::I64,
+            CelesteType::Void => types::I8,
+        }
+    }
+
+    pub fn get_expr_type(&self, expr: &Expr) -> CelesteType {
+        match expr {
+            Expr::Variable(name) => self
+                .lookup_variable(name)
+                .map(|v| v.var_type.clone())
+                .unwrap_or(CelesteType::Int),
+            Expr::AddressOf(name) => {
+                let inner = self.get_expr_type(&Expr::Variable(name.clone()));
+                CelesteType::Pointer(Box::new(inner))
+            }
+            Expr::Deref(inner) => {
+                if let CelesteType::Pointer(base) = self.get_expr_type(inner) {
+                    *base
+                } else {
+                    CelesteType::Int
+                }
+            }
+            Expr::Call { name, .. } => self.globals.get(name).cloned().unwrap_or(CelesteType::Int),
+            _ => CelesteType::Int,
         }
     }
 }

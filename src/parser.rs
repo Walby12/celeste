@@ -111,12 +111,7 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
             exit(1)
         };
         lexe(comp);
-        let p_ty = if let TokenType::Ident(ref ty_str) = comp.cur_tok {
-            string_to_celeste_type(ty_str)
-        } else {
-            exit(1)
-        };
-        lexe(comp);
+        let p_ty = parse_type(comp);
 
         params.push(Param {
             name: p_name.clone(),
@@ -137,15 +132,14 @@ fn parse_fn_decl(comp: &mut Compiler) -> Stmt {
     }
     lexe(comp);
 
-    let fn_return_type_str = if let TokenType::Ident(ref fn_type) = comp.cur_tok {
-        let t = fn_type.clone();
-        lexe(comp);
-        t
-    } else {
-        "void".to_string()
+    let return_type = parse_type(comp);
+    let fn_return_type_str = match &return_type {
+        CelesteType::Int => "int".to_string(),
+        CelesteType::String => "string".to_string(),
+        CelesteType::Pointer(_) => "pointer".to_string(),
+        _ => "void".to_string(),
     };
 
-    let return_type = string_to_celeste_type(&fn_return_type_str);
     comp.globals.insert(fn_name.clone(), return_type.clone());
 
     let body = parse_block_internal(comp, &fn_name, &fn_return_type_str);
@@ -226,29 +220,23 @@ fn parse_extrn_decl(comp: &mut Compiler) -> Stmt {
 
     lexe(comp);
 
+    let mut is_variadic = false;
     let mut arg_types = Vec::new();
     while !matches!(comp.cur_tok, TokenType::CloseParen) {
         if matches!(comp.cur_tok, TokenType::Ellipsis) {
+            is_variadic = true;
             lexe(comp);
             break;
         }
-        if let TokenType::Ident(ref ty_str) = comp.cur_tok {
-            arg_types.push(string_to_celeste_type(ty_str));
-            lexe(comp);
-        }
+        arg_types.push(parse_type(comp));
+
         if matches!(comp.cur_tok, TokenType::Comma) {
             lexe(comp);
         }
     }
     lexe(comp);
 
-    let return_type = if let TokenType::Ident(ref ty_str) = comp.cur_tok {
-        let t = string_to_celeste_type(ty_str);
-        lexe(comp);
-        t
-    } else {
-        CelesteType::Void
-    };
+    let return_type = parse_type(comp);
 
     if matches!(comp.cur_tok, TokenType::Semicolon) {
         lexe(comp);
@@ -259,12 +247,34 @@ fn parse_extrn_decl(comp: &mut Compiler) -> Stmt {
         name: fn_name,
         arg_types,
         return_type,
+        is_variadic,
     }
 }
 
 fn parse_stmt(comp: &mut Compiler, func: &Stmt) -> Stmt {
     let start_line = comp.line;
     match comp.cur_tok {
+        TokenType::Ident(ref id) if id == "ptr" => {
+            lexe(comp);
+            let (target_expr, _) = parse_expr(comp);
+
+            if matches!(comp.cur_tok, TokenType::Equals) {
+                lexe(comp);
+                let (value_expr, _) = parse_expr(comp);
+                if matches!(comp.cur_tok, TokenType::Semicolon) {
+                    lexe(comp);
+                }
+                Stmt::PtrAssign {
+                    ptr_expr: Box::new(target_expr),
+                    value: Box::new(value_expr),
+                }
+            } else {
+                if matches!(comp.cur_tok, TokenType::Semicolon) {
+                    lexe(comp);
+                }
+                Stmt::Expression(Expr::Deref(Box::new(target_expr)), start_line)
+            }
+        }
         TokenType::Let => parse_let_stmt(comp),
         TokenType::Return => parse_return_stmt(comp, func),
         TokenType::If => parse_if_stmt(comp, func),
@@ -670,7 +680,6 @@ fn parse_unary(comp: &mut Compiler) -> (Expr, CelesteType) {
         TokenType::Bang => {
             lexe(comp);
             let (right, _) = parse_unary(comp);
-
             (
                 Expr::Unary {
                     op: '!',
@@ -689,6 +698,42 @@ fn parse_unary(comp: &mut Compiler) -> (Expr, CelesteType) {
                 },
                 CelesteType::Int,
             )
+        }
+        TokenType::Ampersand => {
+            lexe(comp);
+            if let TokenType::Ident(ref name) = comp.cur_tok {
+                let info = comp.lookup_variable(name).cloned().unwrap_or_else(|| {
+                    eprintln!("error: undefined variable '{}'", name);
+                    exit(1);
+                });
+
+                if !info.is_mutable {
+                    eprintln!(
+                        "error [file: {}, line: {}]: cannot take mutable address of immutable variable '{}'",
+                        comp.filename, comp.line, name
+                    );
+                    exit(1);
+                }
+
+                let var_name = name.clone();
+                lexe(comp);
+                (
+                    Expr::AddressOf(var_name),
+                    CelesteType::Pointer(Box::new(info.var_type)),
+                )
+            } else {
+                eprintln!("error: '&' must be followed by a variable name");
+                exit(1);
+            }
+        }
+        TokenType::Ident(ref id) if id == "ptr" => {
+            lexe(comp);
+            let (right, right_ty) = parse_unary(comp);
+
+            match right_ty {
+                CelesteType::Pointer(inner_ty) => (Expr::Deref(Box::new(right)), *inner_ty),
+                _ => (Expr::Deref(Box::new(right)), CelesteType::Int),
+            }
         }
         _ => parse_primary(comp),
     }
@@ -753,10 +798,27 @@ fn parse_primary(comp: &mut Compiler) -> (Expr, CelesteType) {
     }
 }
 
-fn string_to_celeste_type(s: &str) -> CelesteType {
-    match s.trim() {
-        "int" => CelesteType::Int,
-        "string" => CelesteType::String,
-        _ => CelesteType::Void,
+fn parse_type(comp: &mut Compiler) -> CelesteType {
+    let mut ty = if let TokenType::Ident(ref name) = comp.cur_tok {
+        let base = match name.as_str() {
+            "int" => CelesteType::Int,
+            "string" => CelesteType::String,
+            "void" => CelesteType::Void,
+            _ => CelesteType::Int,
+        };
+        lexe(comp);
+        base
+    } else {
+        return CelesteType::Int;
+    };
+
+    while let TokenType::Ident(ref name) = comp.cur_tok {
+        if name == "ptr" {
+            ty = CelesteType::Pointer(Box::new(ty));
+            lexe(comp);
+        } else {
+            break;
+        }
     }
+    ty
 }

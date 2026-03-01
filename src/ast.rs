@@ -3,6 +3,7 @@ pub enum CelesteType {
     Int,
     String,
     Void,
+    Pointer(Box<CelesteType>),
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +35,8 @@ pub enum Expr {
         op: char,
         right: Box<Expr>,
     },
+    AddressOf(String),
+    Deref(Box<Expr>),
 }
 
 #[derive(Debug)]
@@ -62,6 +65,7 @@ pub enum Stmt {
         name: String,
         arg_types: Vec<CelesteType>,
         return_type: CelesteType,
+        is_variadic: bool,
     },
     If {
         condition: Expr,
@@ -75,6 +79,10 @@ pub enum Stmt {
         condition: Option<Expr>,
         post: Option<Box<Stmt>>,
         body: Vec<Stmt>,
+    },
+    PtrAssign {
+        ptr_expr: Box<Expr>,
+        value: Box<Expr>,
     },
     Expression(Expr, usize),
 }

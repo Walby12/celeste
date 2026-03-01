@@ -162,6 +162,22 @@ impl<'a> TypeChecker<'a> {
                 CelesteType::Int
             }
             Expr::Call { name, args } => self.check_call(name, args, line),
+            Expr::AddressOf(name) => {
+                let info = self.comp.lookup_variable(name).cloned().unwrap_or_else(|| {
+                    self.report_error(format!("undefined variable '{}'", name), line)
+                });
+                CelesteType::Pointer(Box::new(info.var_type))
+            }
+
+            Expr::Deref(inner_expr) => {
+                let ty = self.check_expr(inner_expr, line);
+
+                if let CelesteType::Pointer(inner_ty) = ty {
+                    *inner_ty
+                } else {
+                    self.report_error("cannot dereference non-pointer type".to_string(), line)
+                }
+            }
         }
     }
 
@@ -181,16 +197,29 @@ impl<'a> TypeChecker<'a> {
             self.report_error(format!("call to undefined function '{}'", name), line)
         });
 
-        if fn_info.params.len() != args.len() {
-            self.report_error(
-                format!(
-                    "function '{}' expects {} arguments, but {} were provided",
-                    name,
-                    fn_info.params.len(),
-                    args.len()
-                ),
-                line,
-            );
+        let expected = fn_info.params.len();
+        let provided = args.len();
+
+        if fn_info.is_variadic {
+            if provided < expected {
+                self.report_error(
+                    format!(
+                        "variadic function '{}' expects at least {} arguments, but only {} were provided",
+                        name, expected, provided
+                    ),
+                    line,
+                );
+            }
+        } else {
+            if expected != provided {
+                self.report_error(
+                    format!(
+                        "function '{}' expects {} arguments, but {} were provided",
+                        name, expected, provided
+                    ),
+                    line,
+                );
+            }
         }
 
         for (i, (expected_ty, arg_expr)) in fn_info.params.iter().zip(args).enumerate() {
