@@ -199,6 +199,8 @@ pub fn lexe(comp: &mut Compiler) {
         "include" => TokenType::Include,
         "if" => TokenType::If,
         "else" => TokenType::Else,
+        "for" => TokenType::For,
+        "while" => TokenType::While,
         _ if value.chars().all(|c| c.is_ascii_digit()) => {
             let n = value.parse::<i32>().unwrap_or(0);
             TokenType::Int(n)

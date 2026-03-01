@@ -8,7 +8,7 @@ pub enum CelesteType {
     Void,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Param {
     pub name: String,
     pub ty: CelesteType,
@@ -65,6 +65,12 @@ pub enum Stmt {
         then_block: Vec<Stmt>,
         else_ifs: Vec<(Expr, Vec<Stmt>)>,
         else_block: Option<Vec<Stmt>>,
+    },
+    For {
+        init: Option<Box<Stmt>>,
+        condition: Option<Expr>,
+        post: Option<Box<Stmt>>,
+        body: Vec<Stmt>,
     },
     Expression(Expr),
 }

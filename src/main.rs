@@ -59,22 +59,17 @@ fn main() {
 
     if args.dump_ast {
         let mut ast_content = String::new();
-
         for stmt in &program.stmts {
             ast_content.push_str(&format!("{:#?}\n", stmt));
         }
-
         let ast_path = input_path.with_extension("celeste_ast.txt");
-
         std::fs::write(&ast_path, ast_content).expect("Failed to write AST dump");
-
         println!("AST dumped to: {}", ast_path.display());
     }
 
     let mut backend = CraneliftAOTBackend::new();
-
     println!("Compiling {}...", input_path.display());
-    backend.compile_program(&program);
+    backend.compile_program(&program, &mut comp);
 
     let output_str = output_path
         .to_str()
@@ -88,7 +83,6 @@ fn main() {
     } else {
         ""
     };
-
     let exe_path = if args.output == "out" {
         input_path.with_extension(exe_extension)
     } else {
@@ -98,11 +92,13 @@ fn main() {
     let exe_str = exe_path.to_str().expect("Invalid path");
 
     let mut linker = Command::new("clang");
-    linker
-        .arg(output_str)
-        .arg("stdlib/stdlib.c")
-        .arg("-o")
-        .arg(exe_str);
+
+    linker.arg(output_str);
+
+    linker.arg("-L./bin");
+    linker.arg("-lceleste_std");
+
+    linker.arg("-o").arg(exe_str);
 
     if cfg!(target_os = "windows") {
         linker
